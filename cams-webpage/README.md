@@ -74,8 +74,11 @@ npm start
 
 Open <http://localhost:8080>.
 
-The login is a UI-only demonstration. Enter any non-empty username and
-password. No value is sent to a server or stored.
+The sign-in screen uses a browser-only review session. Enter a username or
+email and a password of at least four characters. The password is never stored.
+Selecting **Remember me** stores only the review identity and session expiry in
+the browser for up to seven days; otherwise the session ends with the browser
+session. No value is sent to a server.
 
 ## Testing procedure
 
@@ -92,15 +95,17 @@ responsive rules, and core UI modules pass validation.
 
 ### Manual UI test
 
-1. Open the page at desktop width and sign in with non-empty demo values.
-2. Verify the dashboard shows 13 machines and four KPI cards.
-3. Open Machines and test search and every status filter.
-4. Open a machine and verify its sensors, trend, health, service, and alarms.
-5. Change machine, parameter, and time range on Trends.
-6. Filter alarms and test View, Acknowledge, and Resolve.
-7. Review Maintenance, Reports, Settings, and Energy preview screens.
-8. Repeat at tablet and mobile widths, including the mobile sidebar.
-9. Check the browser console for errors.
+1. Open the page at desktop width and sign in with review values.
+2. Reload the page and verify a remembered review session is restored.
+3. Open the account menu and verify Sign out clears the session.
+4. Verify the dashboard shows 13 machines and four KPI cards.
+5. Open Machines and test search and every status filter.
+6. Open a machine and verify its sensors, trend, health, service, and alarms.
+7. Change machine, parameter, and time range on Trends.
+8. Filter alarms and test View, Acknowledge, and Resolve.
+9. Review Maintenance, Reports, Settings, and Energy preview screens.
+10. Repeat at tablet and mobile widths, including the mobile sidebar.
+11. Check the browser console for errors.
 
 ### Recorded test result
 
@@ -117,6 +122,8 @@ responsive rules, and core UI modules pass validation.
 - Responsive layout: implemented
 - Mock compressor fleet: implemented
 - Review interactions: implemented
+- E7 powered-by branding: implemented
+- Browser review sessions and sign-out: implemented
 - Automated structural checks: implemented
 - API/backend integration: not started
 - MQTT integration: not started
@@ -126,12 +133,16 @@ responsive rules, and core UI modules pass validation.
 ## Known issues and limitations
 
 - All readings, events, timestamps, and statistics are mock data.
-- The login form is not authentication and accepts any non-empty values.
+- The browser review session is a UI gate, not production authentication.
+- User verification, password recovery email, authorization roles, MFA, and
+  audit logging require an approved identity provider or backend service.
+- The UI accepts any review identity and password of four or more characters;
+  no password is transmitted or stored.
 - Alarm acknowledgement and resolution exist only in browser memory.
 - Refreshing the page resets all UI state.
 - Export buttons demonstrate interactions but do not create files.
 - The displayed plant identity is generic to avoid publishing customer data.
-- The approved company logo is not included.
+- The supplied E7 powered-by logo is included as a compressed UI asset.
 - Google Fonts are loaded from the network; system fonts are used if offline.
 - The final PLC/ESP32-S3 communication architecture is not yet approved.
 - Engineering units, thresholds, retention, roles, and alarm rules require

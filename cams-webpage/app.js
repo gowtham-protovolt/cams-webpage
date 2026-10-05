@@ -1,6 +1,56 @@
 const app = document.querySelector("#app");
 const toastRegion = document.querySelector("#toast-region");
 
+const AUTH_STORAGE_KEY = "cams-review-session-v1";
+const SESSION_DURATION = 8 * 60 * 60 * 1000;
+const REMEMBERED_SESSION_DURATION = 7 * 24 * 60 * 60 * 1000;
+
+const reviewAuth = {
+  restore() {
+    for (const storage of [window.sessionStorage, window.localStorage]) {
+      try {
+        const raw = storage.getItem(AUTH_STORAGE_KEY);
+        if (!raw) continue;
+        const session = JSON.parse(raw);
+        if (!session?.identity || !session?.expiresAt || session.expiresAt <= Date.now()) {
+          storage.removeItem(AUTH_STORAGE_KEY);
+          continue;
+        }
+        return session;
+      } catch {
+        storage.removeItem(AUTH_STORAGE_KEY);
+      }
+    }
+    return null;
+  },
+  signIn(identity, password, remember) {
+    return new Promise((resolve, reject) => {
+      window.setTimeout(() => {
+        if (identity.toLowerCase() === "invalid") {
+          reject(new Error("These credentials do not match an active review account."));
+          return;
+        }
+        const displayName = identity.includes("@") ? identity.split("@")[0] : identity;
+        const session = {
+          identity,
+          displayName: displayName.replace(/[._-]+/g, " ").replace(/\b\w/g, character => character.toUpperCase()),
+          role: "Owner / Admin",
+          expiresAt: Date.now() + (remember ? REMEMBERED_SESSION_DURATION : SESSION_DURATION)
+        };
+        const storage = remember ? window.localStorage : window.sessionStorage;
+        const otherStorage = remember ? window.sessionStorage : window.localStorage;
+        otherStorage.removeItem(AUTH_STORAGE_KEY);
+        storage.setItem(AUTH_STORAGE_KEY, JSON.stringify(session));
+        resolve(session);
+      }, 650);
+    });
+  },
+  signOut() {
+    window.localStorage.removeItem(AUTH_STORAGE_KEY);
+    window.sessionStorage.removeItem(AUTH_STORAGE_KEY);
+  }
+};
+
 const iconPaths = {
   air: '<path d="M4 8h10.5a3 3 0 1 0-2.7-4.3"/><path d="M3 12h14.5a2.5 2.5 0 1 1-2.2 3.7"/><path d="M4 16h6"/>',
   dashboard: '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>',
@@ -68,6 +118,7 @@ let alarms = [
 
 const state = {
   authenticated: false,
+  currentUser: null,
   page: "dashboard",
   machineId: "CAMS-01",
   machineFilter: "All",
@@ -77,7 +128,8 @@ const state = {
   trendParameter: "Pressure",
   trendRange: "1h",
   mobileOpen: false,
-  notificationsOpen: false
+  notificationsOpen: false,
+  userMenuOpen: false
 };
 
 const navItems = [
@@ -114,6 +166,14 @@ function showToast(message) {
   window.setTimeout(() => toast.remove(), 3200);
 }
 
+function initials(name = "Plant Owner") {
+  return name.split(/\s+/).filter(Boolean).slice(0, 2).map(part => part[0]).join("").toUpperCase() || "PO";
+}
+
+function escapeHtml(value = "") {
+  return String(value).replace(/[&<>'"]/g, character => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[character]));
+}
+
 function renderLogin() {
   app.innerHTML = `<main class="login-shell">
     <section class="login-form-side">
@@ -125,7 +185,7 @@ function renderLogin() {
         <form id="login-form" novalidate>
           <div class="form-field">
             <label for="username">Username or email</label>
-            <div class="input-wrap" id="username-wrap">${icon("user", "field-icon")}<input id="username" name="username" autocomplete="username" placeholder="Enter username"></div>
+            <div class="input-wrap" id="username-wrap">${icon("user", "field-icon")}<input id="username" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" placeholder="Enter username"></div>
             <p class="field-error" id="username-error"></p>
           </div>
           <div class="form-field">
@@ -134,7 +194,7 @@ function renderLogin() {
             <p class="field-error" id="password-error"></p>
           </div>
           <div class="form-options">
-            <label class="checkbox"><input type="checkbox" checked> Remember me</label>
+            <label class="checkbox"><input id="remember-me" type="checkbox" checked> Remember me</label>
             <button class="text-link" id="forgot-password" type="button">Forgot password?</button>
           </div>
           <button class="primary-btn wide" id="login-button" type="submit"><span>Sign in to CAMS</span>${icon("chevronRight")}</button>
@@ -144,7 +204,7 @@ function renderLogin() {
       <footer class="login-footer"><span>© 2026 CAMS</span><span>System version 1.0 · UI review</span></footer>
     </section>
     <aside class="login-visual" aria-label="CAMS overview">
-      <div class="powered-by"><span>Powered by</span><span class="owner-mark">E&amp;</span></div>
+      <div class="powered-by"><img src="./assets/e7-powered-logo.png" alt="Powered by E7"></div>
       <div class="visual-copy">
         <h2>Clarity for every compressor.</h2>
         <p>One operational view of pressure, flow, suction and temperature across your complete compressed air network.</p>
@@ -157,12 +217,26 @@ function renderLogin() {
     const input = document.querySelector("#password");
     input.type = input.type === "password" ? "text" : "password";
     event.currentTarget.innerHTML = icon(input.type === "password" ? "eye" : "eyeOff");
+    event.currentTarget.setAttribute("aria-label", input.type === "password" ? "Show password" : "Hide password");
   });
-  document.querySelector("#forgot-password").addEventListener("click", () => showToast("Password recovery is ready for owner review."));
+  document.querySelector("#forgot-password").addEventListener("click", () => {
+    const username = document.querySelector("#username");
+    const usernameError = document.querySelector("#username-error");
+    const usernameWrap = document.querySelector("#username-wrap");
+    if (!username.value.trim()) {
+      usernameError.textContent = "Enter your username or email first.";
+      usernameWrap.classList.add("invalid");
+      username.focus();
+      return;
+    }
+    usernameError.textContent = "";
+    usernameWrap.classList.remove("invalid");
+    showToast("Recovery request noted. Email delivery will activate with the production identity service.");
+  });
   document.querySelector("#login-form").addEventListener("submit", handleLogin);
 }
 
-function handleLogin(event) {
+async function handleLogin(event) {
   event.preventDefault();
   const username = document.querySelector("#username");
   const password = document.querySelector("#password");
@@ -170,6 +244,7 @@ function handleLogin(event) {
   const passwordError = document.querySelector("#password-error");
   const usernameWrap = document.querySelector("#username-wrap");
   const passwordWrap = document.querySelector("#password-wrap");
+  const remember = document.querySelector("#remember-me");
   usernameError.textContent = "";
   passwordError.textContent = "";
   usernameWrap.classList.remove("invalid");
@@ -183,22 +258,34 @@ function handleLogin(event) {
     passwordWrap.classList.add("invalid");
   }
   if (!username.value.trim() || !password.value) return;
-  if (username.value.trim().toLowerCase() === "invalid") {
-    passwordError.textContent = "These credentials do not match an active account.";
+  if (password.value.length < 4) {
+    passwordError.textContent = "Password must contain at least 4 characters.";
     passwordWrap.classList.add("invalid");
     return;
   }
   const button = document.querySelector("#login-button");
   button.disabled = true;
   button.innerHTML = `<span class="loading-spinner"></span><span>Verifying access…</span>`;
-  window.setTimeout(() => {
+  try {
+    const session = await reviewAuth.signIn(username.value.trim(), password.value, remember.checked);
     state.authenticated = true;
+    state.currentUser = session;
     renderApp();
     showToast("Signed in successfully. Plant data is ready.");
-  }, 650);
+  } catch (error) {
+    password.value = "";
+    passwordError.textContent = error.message;
+    passwordWrap.classList.add("invalid");
+    button.disabled = false;
+    button.innerHTML = `<span>Sign in to CAMS</span>${icon("chevronRight")}`;
+    password.focus();
+  }
 }
 
 function renderApp() {
+  const user = state.currentUser || { displayName: "Plant Owner", role: "Owner / Admin" };
+  const safeName = escapeHtml(user.displayName);
+  const safeRole = escapeHtml(user.role);
   const groups = ["Monitor", "Manage", "Future"];
   const sidebarNav = groups.map(group => `<div class="nav-group-label">${group}</div><nav class="nav-list">${navItems.filter(item => item.group === group).map(item => `<button class="nav-item ${state.page === item.id || (state.page === "machine-detail" && item.id === "machines") ? "active" : ""}" data-page="${item.id}">${icon(item.icon)}<span>${item.label}</span>${item.future ? '<span class="future">P2</span>' : ""}</button>`).join("")}</nav>`).join("");
   app.innerHTML = `<div class="app-shell">
@@ -213,7 +300,10 @@ function renderApp() {
       <div class="header-right">
         <div class="clock"><strong id="header-time">--:--:--</strong><span id="header-date">--</span></div>
         <button class="icon-btn notification-btn" id="notification-button" aria-label="Notifications">${icon("bell")}<span class="notification-badge">2</span></button>
-        <button class="user-menu" id="user-menu"><span class="avatar">PO</span><span class="user-copy"><strong>Plant Owner</strong><span>Owner / Admin</span></span>${icon("chevronDown")}</button>
+        <div class="account-control">
+          <button class="user-menu" id="user-menu" aria-haspopup="menu" aria-expanded="${state.userMenuOpen}"><span class="avatar">${escapeHtml(initials(user.displayName))}</span><span class="user-copy"><strong>${safeName}</strong><span>${safeRole}</span></span>${icon("chevronDown")}</button>
+          ${state.userMenuOpen ? `<div class="account-menu" role="menu"><div class="account-summary"><span class="avatar">${escapeHtml(initials(user.displayName))}</span><div><strong>${safeName}</strong><span>${escapeHtml(user.identity)}</span></div></div><div class="account-session">${icon("shield")}<span>Review session active</span></div><button id="sign-out" class="account-action" role="menuitem">${icon("logout")}<span>Sign out</span></button></div>` : ""}
+        </div>
       </div>
     </header>
     <main class="main-content">${pageContent()}</main>
@@ -410,7 +500,14 @@ function bindGlobalEvents() {
   document.querySelector("#mobile-overlay")?.addEventListener("click", () => { state.mobileOpen = false; renderApp(); });
   document.querySelector("#notification-button")?.addEventListener("click", () => { navigate("alarms"); });
   document.querySelector("#user-menu")?.addEventListener("click", () => {
+    state.userMenuOpen = !state.userMenuOpen;
+    renderApp();
+  });
+  document.querySelector("#sign-out")?.addEventListener("click", () => {
+    reviewAuth.signOut();
     state.authenticated = false;
+    state.currentUser = null;
+    state.userMenuOpen = false;
     renderLogin();
     showToast("Signed out of the CAMS review session.");
   });
@@ -464,4 +561,12 @@ function updateClock() {
 }
 
 window.setInterval(() => { if (state.authenticated) updateClock(); }, 1000);
-renderLogin();
+
+const restoredSession = reviewAuth.restore();
+if (restoredSession) {
+  state.authenticated = true;
+  state.currentUser = restoredSession;
+  renderApp();
+} else {
+  renderLogin();
+}

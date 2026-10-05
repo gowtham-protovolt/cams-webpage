@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 
 const files = {
   html: new URL("../index.html", import.meta.url),
@@ -12,11 +12,19 @@ const [html, css, js] = await Promise.all([
   readFile(files.js, "utf8")
 ]);
 
+let logoExists = true;
+try {
+  await access(new URL("../assets/e7-powered-logo.png", import.meta.url));
+} catch {
+  logoExists = false;
+}
+
 const checks = [
   ["page title", html.includes("Compressed Air Monitoring System")],
   ["responsive viewport", html.includes('name="viewport"')],
   ["stylesheet reference", html.includes('href="./styles.css"')],
   ["application script", html.includes('src="./app.js"')],
+  ["E7 logo asset", logoExists && js.includes('alt="Powered by E7"')],
   ["mobile breakpoint", css.includes("@media (max-width: 620px)")],
   ["reduced-motion support", css.includes("prefers-reduced-motion")],
   ["13 machine records", (js.match(/id: "CAMS-/g) || []).length === 13],
@@ -26,6 +34,8 @@ const checks = [
   ["alarms page", js.includes("function alarmsPage()")],
   ["no backend connection", !js.includes("fetch(") && !js.includes("WebSocket")],
   ["no embedded demo password", !js.includes('value="cams')],
+  ["password is not persisted", !js.includes("password: password") && !js.includes("password: password.value")],
+  ["review session expiry", js.includes("expiresAt") && js.includes("reviewAuth.signOut()")],
   ["sanitized public identity", !js.includes("Gowtham") && !js.includes("Dharanidhara")]
 ];
 
