@@ -122,7 +122,7 @@ responsive rules, and core UI modules pass validation.
 - Responsive layout: implemented
 - Mock compressor fleet: implemented
 - Review interactions: implemented
-- E7 powered-by branding: implemented
+- Compact E7 powered-by mark: implemented
 - Browser review sessions and sign-out: implemented
 - Automated structural checks: implemented
 - API/backend integration: not started
@@ -142,7 +142,8 @@ responsive rules, and core UI modules pass validation.
 - Refreshing the page resets all UI state.
 - Export buttons demonstrate interactions but do not create files.
 - The displayed plant identity is generic to avoid publishing customer data.
-- The supplied E7 powered-by logo is included as a compressed UI asset.
+- The compact top-right powered-by mark identifies E7 without adding a large
+  logo panel to the login screen.
 - Google Fonts are loaded from the network; system fonts are used if offline.
 - The final PLC/ESP32-S3 communication architecture is not yet approved.
 - Engineering units, thresholds, retention, roles, and alarm rules require

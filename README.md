@@ -18,8 +18,6 @@ cams-webpage/
 │   └── README.md
 └── cams-webpage/
     ├── README.md
-    ├── assets/
-    │   └── e7-powered-logo.png
     ├── app.js
     ├── index.html
     ├── package.json

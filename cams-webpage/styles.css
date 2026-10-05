@@ -164,17 +164,8 @@ svg { display: block; }
   mask-image: linear-gradient(120deg, transparent 8%, black 55%, transparent 95%);
 }
 .login-visual::after { width: 430px; height: 430px; right: -100px; bottom: -110px; border: 1px solid rgba(255,255,255,.13); border-radius: 50%; box-shadow: 0 0 0 70px rgba(255,255,255,.025), 0 0 0 140px rgba(255,255,255,.018); }
-.powered-by { position: relative; z-index: 1; display: flex; justify-content: flex-end; }
-.powered-by img {
-  width: clamp(148px, 12vw, 184px);
-  height: auto;
-  display: block;
-  padding: 8px 10px;
-  border: 1px solid rgba(255,255,255,.22);
-  border-radius: 11px;
-  background: rgba(255,255,255,.96);
-  box-shadow: 0 12px 28px rgba(1,19,24,.18);
-}
+.powered-by { position: relative; z-index: 1; display: flex; justify-content: flex-end; align-items: center; gap: 12px; color: rgba(255,255,255,.62); font-size: .75rem; text-transform: uppercase; letter-spacing: .11em; }
+.owner-mark { color: white; font-family: Manrope, sans-serif; font-size: 1.45rem; font-weight: 800; letter-spacing: -.04em; }
 .visual-copy { position: relative; z-index: 1; max-width: 620px; }
 .visual-copy h2 { max-width: 610px; margin: 0 0 22px; font-family: Manrope, sans-serif; font-size: clamp(2.3rem, 4.6vw, 4.9rem); line-height: 1.05; letter-spacing: -.055em; }
 .visual-copy > p { max-width: 510px; margin: 0; color: rgba(255,255,255,.65); font-size: 1.02rem; line-height: 1.7; }

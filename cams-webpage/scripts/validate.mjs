@@ -1,4 +1,4 @@
-import { access, readFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 
 const files = {
   html: new URL("../index.html", import.meta.url),
@@ -12,19 +12,12 @@ const [html, css, js] = await Promise.all([
   readFile(files.js, "utf8")
 ]);
 
-let logoExists = true;
-try {
-  await access(new URL("../assets/e7-powered-logo.png", import.meta.url));
-} catch {
-  logoExists = false;
-}
-
 const checks = [
   ["page title", html.includes("Compressed Air Monitoring System")],
   ["responsive viewport", html.includes('name="viewport"')],
   ["stylesheet reference", html.includes('href="./styles.css"')],
   ["application script", html.includes('src="./app.js"')],
-  ["E7 logo asset", logoExists && js.includes('alt="Powered by E7"')],
+  ["E7 powered-by mark", js.includes('<span class="owner-mark">E7</span>')],
   ["mobile breakpoint", css.includes("@media (max-width: 620px)")],
   ["reduced-motion support", css.includes("prefers-reduced-motion")],
   ["13 machine records", (js.match(/id: "CAMS-/g) || []).length === 13],

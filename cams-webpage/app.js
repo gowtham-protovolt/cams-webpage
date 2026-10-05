@@ -204,7 +204,7 @@ function renderLogin() {
       <footer class="login-footer"><span>© 2026 CAMS</span><span>System version 1.0 · UI review</span></footer>
     </section>
     <aside class="login-visual" aria-label="CAMS overview">
-      <div class="powered-by"><img src="./assets/e7-powered-logo.png" alt="Powered by E7"></div>
+      <div class="powered-by"><span>Powered by</span><span class="owner-mark">E7</span></div>
       <div class="visual-copy">
         <h2>Clarity for every compressor.</h2>
         <p>One operational view of pressure, flow, suction and temperature across your complete compressed air network.</p>
