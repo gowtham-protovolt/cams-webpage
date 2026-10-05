@@ -40,6 +40,12 @@ export function loadConfig() {
     throw new Error("COOKIE_SECURE must be true when COOKIE_SAME_SITE is none.");
   }
 
+  const mqttEnabled = boolean("MQTT_ENABLED", false);
+  const mqttUrl = process.env.MQTT_URL?.trim() || "mqtt://127.0.0.1:1884";
+  if (mqttEnabled && production && !mqttUrl.startsWith("mqtts://") && !mqttUrl.startsWith("wss://")) {
+    throw new Error("Production MQTT_URL must use mqtts:// or wss://.");
+  }
+
   return {
     environment: process.env.NODE_ENV || "development",
     production,
@@ -53,6 +59,15 @@ export function loadConfig() {
       sameSite: cookieSameSite
     },
     sessionHours: integer("SESSION_HOURS", 8),
-    rememberedSessionDays: integer("REMEMBER_SESSION_DAYS", 7)
+    rememberedSessionDays: integer("REMEMBER_SESSION_DAYS", 7),
+    telemetryRetentionDays: integer("TELEMETRY_RETENTION_DAYS", 90),
+    mqtt: {
+      enabled: mqttEnabled,
+      url: mqttUrl,
+      username: process.env.MQTT_USERNAME?.trim() || undefined,
+      password: process.env.MQTT_PASSWORD || undefined,
+      topic: process.env.MQTT_TOPIC?.trim() || "cams/+/+/telemetry",
+      clientId: process.env.MQTT_CLIENT_ID?.trim() || "cams-api"
+    }
   };
 }
