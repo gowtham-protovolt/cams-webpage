@@ -5,6 +5,8 @@ import helmet from "helmet";
 import { authRouter } from "./routes/auth.js";
 import { authenticate } from "./middleware/auth.js";
 import { publicUser } from "./auth/session.js";
+import { telemetryRouter } from "./routes/telemetry.js";
+import { getMqttStatus } from "./telemetry/mqtt.js";
 
 export function createApp(config) {
   const app = express();
@@ -32,9 +34,10 @@ export function createApp(config) {
   app.use(authenticate(config));
 
   app.get("/api/health", (_request, response) => {
-    response.json({ status: "ok", service: "cams-api", timestamp: new Date().toISOString() });
+    response.json({ status: "ok", service: "cams-api", mqtt: getMqttStatus(), timestamp: new Date().toISOString() });
   });
   app.use("/api/auth", authRouter(config));
+  app.use("/api", telemetryRouter());
 
   app.use((_request, response) => response.status(404).json({ error: "Not found." }));
   app.use((error, _request, response, _next) => {

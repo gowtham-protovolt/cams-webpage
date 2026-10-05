@@ -3,10 +3,11 @@
 ## Project name and objective
 
 **CAMS API** is the backend service for the Compressed Air Monitoring System.
-Step 1 provides real MongoDB-backed user accounts, password verification,
-server-side sessions, login throttling, account lockout, CORS controls, and a
-health endpoint. Passwords are hashed with Node.js `scrypt`; raw passwords and
-session tokens are never stored in MongoDB.
+It provides real MongoDB-backed user accounts, password verification,
+server-side sessions, login throttling, account lockout, CORS controls, MQTT
+telemetry ingestion, time-series retention, protected telemetry APIs, and an
+authenticated server-sent event stream. Passwords are hashed with Node.js
+`scrypt`; raw passwords and session tokens are never stored in MongoDB.
 
 ## Responsible team member
 
@@ -20,7 +21,7 @@ compressor hardware are intentionally outside this step.
 ## Software requirements
 
 - Node.js 24 or newer
-- Docker Desktop for the local MongoDB 7 test service
+- Docker Desktop for the local MongoDB 7 and Mosquitto test services
 - A production MongoDB deployment such as MongoDB Atlas for hosting
 
 ## Installation and setup
@@ -28,7 +29,7 @@ compressor hardware are intentionally outside this step.
 ```bash
 cd cams-api
 cp .env.example .env
-docker compose up -d mongodb
+docker compose up -d mongodb mqtt
 npm install
 ```
 
@@ -37,6 +38,7 @@ the owner account:
 
 ```bash
 npm run create-admin
+npm run seed-machines
 ```
 
 Remove `CAMS_ADMIN_PASSWORD` from `.env` after the account has been created.
@@ -45,6 +47,16 @@ Start the API with:
 ```bash
 npm run dev
 ```
+
+Publish one controlled local telemetry cycle:
+
+```bash
+SIMULATOR_ONCE=true npm run simulate-telemetry
+```
+
+Production MQTT must use `mqtts://` or `wss://`, broker authentication, unique
+device identities, restricted topic permissions, and secrets stored outside the
+repository.
 
 Never commit `.env`, MongoDB credentials, passwords, session cookies, private
 certificates, or customer information.
@@ -70,6 +82,9 @@ longer works.
 - Login rate limiting and account lockout: implemented
 - Secure cookie configuration: implemented
 - Frontend API integration: implemented and browser-tested locally
+- MongoDB machine inventory and time-series telemetry: implemented locally
+- MQTT QoS 1 ingestion and duplicate protection: implemented locally
+- Protected machine/history APIs and live SSE stream: implemented locally
 - Production MongoDB and API hosting: not configured
 - Password-reset email and MFA: not implemented
 
@@ -84,6 +99,10 @@ longer works.
   third-party cookies can be blocked by browsers.
 - Password-reset email, MFA, user administration, and security audit events are
   not included yet.
+- The bundled Mosquitto configuration allows anonymous access and is strictly
+  for a loopback-bound local development broker; never deploy it publicly.
+- Production device certificates, MQTT ACLs, broker hosting, and the final
+  hardware payload mapping are not configured.
 - The API must be deployed behind HTTPS and must not expose MongoDB publicly.
 
 ## Results and observations
@@ -93,5 +112,8 @@ Pages. Invalid credentials were rejected, a valid MongoDB user created an
 `HttpOnly` session, the session survived a browser reload, and logout revoked
 the server record. The official MongoDB driver uses a reusable connection pool,
 and session records have a TTL index so expired sessions are removed
-automatically. Full production verification remains incomplete until the API
-and MongoDB are deployed with real secrets in approved secure storage.
+automatically. A controlled MQTT publisher delivered readings for all 13
+machines through Mosquitto into MongoDB, protected history APIs, and the live
+SSE stream. Full production verification remains incomplete until the API,
+MongoDB, and broker are deployed with real secrets and device identities in
+approved secure storage.

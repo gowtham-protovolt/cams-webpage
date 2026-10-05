@@ -48,8 +48,8 @@ steps.
 ## Implementation roadmap
 
 1. **Real authentication and API foundation — local implementation complete**
-2. **MongoDB operational data models — planned**
-3. **MQTT ingestion and live telemetry — planned**
+2. **MongoDB operational data models — local implementation complete**
+3. **MQTT ingestion and live telemetry API — local implementation complete**
 4. **Dashboard API integration and alarm workflows — planned**
 5. **PDF/Excel exports, deployment, and production verification — planned**
 
