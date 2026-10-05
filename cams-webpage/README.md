@@ -7,9 +7,9 @@ the current condition of a compressed-air network. The prototype presents a
 login experience, a plant dashboard, 13 compressor records, machine details,
 parameter trends, alarms, and preview screens for later modules.
 
-The objective of this phase is to validate information hierarchy, navigation,
-visual design, terminology, engineering units, and alarm workflows before any
-backend or equipment integration begins.
+The objective is to deliver the monitoring interface in controlled stages. The
+current branch connects the login screen to the CAMS API and its MongoDB-backed
+server sessions while retaining mock compressor data until MQTT integration.
 
 ## Responsible team member
 
@@ -22,8 +22,8 @@ results, status updates, and helping reviewers understand the UI.
 
 **In Progress**
 
-The review-stage UI is complete. Functional integration and production
-hardening have not started.
+The review-stage UI is complete. Real authentication works in the local
+integration environment. Production API and MongoDB hosting are not configured.
 
 ## Hardware requirements
 
@@ -74,11 +74,10 @@ npm start
 
 Open <http://localhost:8080>.
 
-The sign-in screen uses a browser-only review session. Enter a username or
-email and a password of at least four characters. The password is never stored.
-Selecting **Remember me** stores only the review identity and session expiry in
-the browser for up to seven days; otherwise the session ends with the browser
-session. No value is sent to a server.
+The sign-in screen now requires the CAMS API. For local work, start `cams-api`
+on port 3100 after configuring MongoDB and creating an owner account. Passwords
+are verified by the API and are never stored in the browser. Authentication is
+maintained with an `HttpOnly` server session cookie.
 
 ## Testing procedure
 
@@ -95,26 +94,30 @@ responsive rules, and core UI modules pass validation.
 
 ### Manual UI test
 
-1. Open the page at desktop width and sign in with review values.
-2. Reload the page and verify a remembered review session is restored.
-3. Open the account menu and verify Sign out clears the session.
-4. Verify the dashboard shows 13 machines and four KPI cards.
-5. Open Machines and test search and every status filter.
-6. Open a machine and verify its sensors, trend, health, service, and alarms.
-7. Change machine, parameter, and time range on Trends.
-8. Filter alarms and test View, Acknowledge, and Resolve.
-9. Review Maintenance, Reports, Settings, and Energy preview screens.
-10. Repeat at tablet and mobile widths, including the mobile sidebar.
-11. Check the browser console for errors.
+1. Start MongoDB and the CAMS API, then open the page at desktop width.
+2. Verify an incorrect password is rejected.
+3. Sign in with a real account stored in MongoDB.
+4. Reload the page and verify the server session is restored.
+5. Open the account menu and verify Sign out revokes the server session.
+6. Verify the dashboard shows 13 machines and four KPI cards.
+7. Open Machines and test search and every status filter.
+8. Open a machine and verify its sensors, trend, health, service, and alarms.
+9. Change machine, parameter, and time range on Trends.
+10. Filter alarms and test View, Acknowledge, and Resolve.
+11. Review Maintenance, Reports, Settings, and Energy preview screens.
+12. Repeat at tablet and mobile widths, including the mobile sidebar.
+13. Check the browser console for errors.
 
 ### Recorded test result
 
-- **Configuration:** Static UI, mock data, current Chromium browser
+- **Configuration:** Local CAMS API, MongoDB 7.0.43, static UI, mock telemetry,
+  current Chromium browser
 - **Date:** 2026-10-05
 - **Responsible:** CAMS Project Team
-- **Expected result:** All screens render and all review interactions work
-- **Observed result:** Passed desktop and responsive visual checks; no browser
-  console errors observed
+- **Expected result:** Invalid credentials fail; a valid MongoDB account signs
+  in, survives reload, and is revoked on logout
+- **Observed result:** Passed the full browser authentication flow and all 18
+  UI structural checks
 
 ## Current status
 
@@ -123,21 +126,20 @@ responsive rules, and core UI modules pass validation.
 - Mock compressor fleet: implemented
 - Review interactions: implemented
 - Compact E7 powered-by mark: implemented
-- Browser review sessions and sign-out: implemented
+- MongoDB-backed login and server sign-out: implemented locally
 - Automated structural checks: implemented
-- API/backend integration: not started
+- Authentication API integration: implemented locally
 - MQTT integration: not started
-- Database integration: not started
-- Production authentication: not started
+- Authentication database integration: implemented locally
+- Production authentication deployment: not started
 
 ## Known issues and limitations
 
 - All readings, events, timestamps, and statistics are mock data.
-- The browser review session is a UI gate, not production authentication.
-- User verification, password recovery email, authorization roles, MFA, and
-  audit logging require an approved identity provider or backend service.
-- The UI accepts any review identity and password of four or more characters;
-  no password is transmitted or stored.
+- Production login remains unavailable until the API and MongoDB are hosted and
+  the GitHub repository variable `CAMS_API_URL` is configured.
+- Password-reset email, MFA, user administration, and authentication audit
+  events are not implemented yet.
 - Alarm acknowledgement and resolution exist only in browser memory.
 - Refreshing the page resets all UI state.
 - Export buttons demonstrate interactions but do not create files.

@@ -29,6 +29,11 @@ jobs:
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
 
+      - name: Configure CAMS API endpoint
+        env:
+          CAMS_API_URL: ${{ vars.CAMS_API_URL }}
+        run: node cams-webpage/scripts/write-runtime-config.mjs
+
       - name: Upload CAMS webpage
         uses: actions/upload-pages-artifact@v3
         with:
