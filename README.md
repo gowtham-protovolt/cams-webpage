@@ -33,8 +33,9 @@ requirements, setup, testing, current status, limitations, and observations.
 
 ## Status
 
-**In Progress** — UI prototype ready for stakeholder review. Backend, database,
-MQTT, authentication, and production deployment are not included.
+**In Progress** — E7-branded UI prototype ready for stakeholder review. The
+browser review session is implemented; backend identity verification, database,
+and MQTT integration are not included.
 
 ## Contribution workflow
 

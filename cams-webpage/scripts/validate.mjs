@@ -17,6 +17,7 @@ const checks = [
   ["responsive viewport", html.includes('name="viewport"')],
   ["stylesheet reference", html.includes('href="./styles.css"')],
   ["application script", html.includes('src="./app.js"')],
+  ["E7 powered-by mark", js.includes('<span class="owner-mark">E7</span>')],
   ["mobile breakpoint", css.includes("@media (max-width: 620px)")],
   ["reduced-motion support", css.includes("prefers-reduced-motion")],
   ["13 machine records", (js.match(/id: "CAMS-/g) || []).length === 13],
@@ -26,6 +27,8 @@ const checks = [
   ["alarms page", js.includes("function alarmsPage()")],
   ["no backend connection", !js.includes("fetch(") && !js.includes("WebSocket")],
   ["no embedded demo password", !js.includes('value="cams')],
+  ["password is not persisted", !js.includes("password: password") && !js.includes("password: password.value")],
+  ["review session expiry", js.includes("expiresAt") && js.includes("reviewAuth.signOut()")],
   ["sanitized public identity", !js.includes("Gowtham") && !js.includes("Dharanidhara")]
 ];
 
