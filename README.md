@@ -16,6 +16,13 @@ cams-webpage/
 ├── README.md
 ├── shared/
 │   └── README.md
+├── cams-api/
+│   ├── README.md
+│   ├── docker-compose.yml
+│   ├── package.json
+│   ├── scripts/
+│   ├── src/
+│   └── test/
 └── cams-webpage/
     ├── README.md
     ├── app.js
@@ -33,9 +40,22 @@ requirements, setup, testing, current status, limitations, and observations.
 
 ## Status
 
-**In Progress** — E7-branded UI prototype ready for stakeholder review. The
-browser review session is implemented; backend identity verification, database,
-and MQTT integration are not included.
+**In Progress** — E7-branded UI prototype is available for stakeholder review.
+The real authentication API and MongoDB session layer are under development in
+`cams-api/`; MQTT, telemetry, exports, and production deployment remain future
+steps.
+
+## Implementation roadmap
+
+1. **Real authentication and API foundation — local implementation complete**
+2. **MongoDB operational data models — planned**
+3. **MQTT ingestion and live telemetry — planned**
+4. **Dashboard API integration and alarm workflows — planned**
+5. **PDF/Excel exports, deployment, and production verification — planned**
+
+Step 1 is intentionally not described as production-complete until a managed
+MongoDB deployment, HTTPS API host, secrets, real owner account, and production
+domain/cookie configuration are verified.
 
 ## Contribution workflow
 

@@ -1,0 +1,17 @@
+services:
+  mongodb:
+    image: mongo:7.0.43
+    container_name: cams-api-mongodb
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:27018:27017"
+    volumes:
+      - cams-mongodb-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  cams-mongodb-data:

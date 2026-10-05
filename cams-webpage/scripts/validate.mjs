@@ -6,10 +6,11 @@ const files = {
   js: new URL("../app.js", import.meta.url)
 };
 
-const [html, css, js] = await Promise.all([
+const [html, css, js, runtimeConfig] = await Promise.all([
   readFile(files.html, "utf8"),
   readFile(files.css, "utf8"),
-  readFile(files.js, "utf8")
+  readFile(files.js, "utf8"),
+  readFile(new URL("../runtime-config.js", import.meta.url), "utf8")
 ]);
 
 const checks = [
@@ -17,6 +18,7 @@ const checks = [
   ["responsive viewport", html.includes('name="viewport"')],
   ["stylesheet reference", html.includes('href="./styles.css"')],
   ["application script", html.includes('src="./app.js"')],
+  ["runtime API configuration", html.includes('src="./runtime-config.js"') && runtimeConfig.includes("apiBaseUrl")],
   ["E7 powered-by mark", js.includes('<span class="owner-mark">E7</span>')],
   ["mobile breakpoint", css.includes("@media (max-width: 620px)")],
   ["reduced-motion support", css.includes("prefers-reduced-motion")],
@@ -25,10 +27,10 @@ const checks = [
   ["machine details page", js.includes("function machineDetailPage()")],
   ["trends page", js.includes("function trendsPage()")],
   ["alarms page", js.includes("function alarmsPage()")],
-  ["no backend connection", !js.includes("fetch(") && !js.includes("WebSocket")],
+  ["authentication API connection", js.includes("fetch(`${API_BASE_URL}${path}")],
   ["no embedded demo password", !js.includes('value="cams')],
   ["password is not persisted", !js.includes("password: password") && !js.includes("password: password.value")],
-  ["review session expiry", js.includes("expiresAt") && js.includes("reviewAuth.signOut()")],
+  ["server session restore", js.includes('authApi.restore()') && js.includes('authApi.signOut()')],
   ["sanitized public identity", !js.includes("Gowtham") && !js.includes("Dharanidhara")]
 ];
 

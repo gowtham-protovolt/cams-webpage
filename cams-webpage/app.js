@@ -1,53 +1,51 @@
 const app = document.querySelector("#app");
 const toastRegion = document.querySelector("#toast-region");
 
-const AUTH_STORAGE_KEY = "cams-review-session-v1";
-const SESSION_DURATION = 8 * 60 * 60 * 1000;
-const REMEMBERED_SESSION_DURATION = 7 * 24 * 60 * 60 * 1000;
+const API_BASE_URL = String(window.CAMS_CONFIG?.apiBaseUrl || "").replace(/\/$/, "");
 
-const reviewAuth = {
-  restore() {
-    for (const storage of [window.sessionStorage, window.localStorage]) {
-      try {
-        const raw = storage.getItem(AUTH_STORAGE_KEY);
-        if (!raw) continue;
-        const session = JSON.parse(raw);
-        if (!session?.identity || !session?.expiresAt || session.expiresAt <= Date.now()) {
-          storage.removeItem(AUTH_STORAGE_KEY);
-          continue;
+function sessionUser(user) {
+  return {
+    ...user,
+    identity: user.email || user.username,
+    role: user.role === "owner" ? "Owner / Admin" : user.role
+  };
+}
+
+const authApi = {
+  async request(path, options = {}) {
+    if (!API_BASE_URL) throw new Error("Authentication service is not configured yet.");
+    let response;
+    try {
+      response = await fetch(`${API_BASE_URL}${path}`, {
+        ...options,
+        credentials: "include",
+        headers: {
+          ...(options.body ? { "Content-Type": "application/json" } : {}),
+          ...options.headers
         }
-        return session;
-      } catch {
-        storage.removeItem(AUTH_STORAGE_KEY);
-      }
+      });
+    } catch {
+      throw new Error("Authentication service is unavailable. Try again shortly.");
     }
-    return null;
+    if (response.status === 204) return null;
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || "Authentication request failed.");
+    return payload;
   },
-  signIn(identity, password, remember) {
-    return new Promise((resolve, reject) => {
-      window.setTimeout(() => {
-        if (identity.toLowerCase() === "invalid") {
-          reject(new Error("These credentials do not match an active review account."));
-          return;
-        }
-        const displayName = identity.includes("@") ? identity.split("@")[0] : identity;
-        const session = {
-          identity,
-          displayName: displayName.replace(/[._-]+/g, " ").replace(/\b\w/g, character => character.toUpperCase()),
-          role: "Owner / Admin",
-          expiresAt: Date.now() + (remember ? REMEMBERED_SESSION_DURATION : SESSION_DURATION)
-        };
-        const storage = remember ? window.localStorage : window.sessionStorage;
-        const otherStorage = remember ? window.sessionStorage : window.localStorage;
-        otherStorage.removeItem(AUTH_STORAGE_KEY);
-        storage.setItem(AUTH_STORAGE_KEY, JSON.stringify(session));
-        resolve(session);
-      }, 650);
+  async restore() {
+    if (!API_BASE_URL) return null;
+    const payload = await this.request("/api/auth/me");
+    return sessionUser(payload.user);
+  },
+  async signIn(identity, password, remember) {
+    const payload = await this.request("/api/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ identity, password, remember })
     });
+    return sessionUser(payload.user);
   },
-  signOut() {
-    window.localStorage.removeItem(AUTH_STORAGE_KEY);
-    window.sessionStorage.removeItem(AUTH_STORAGE_KEY);
+  async signOut() {
+    await this.request("/api/auth/logout", { method: "POST", body: "{}" });
   }
 };
 
@@ -231,7 +229,7 @@ function renderLogin() {
     }
     usernameError.textContent = "";
     usernameWrap.classList.remove("invalid");
-    showToast("Recovery request noted. Email delivery will activate with the production identity service.");
+    showToast("Password recovery is not enabled yet. Contact the CAMS administrator.");
   });
   document.querySelector("#login-form").addEventListener("submit", handleLogin);
 }
@@ -258,16 +256,11 @@ async function handleLogin(event) {
     passwordWrap.classList.add("invalid");
   }
   if (!username.value.trim() || !password.value) return;
-  if (password.value.length < 4) {
-    passwordError.textContent = "Password must contain at least 4 characters.";
-    passwordWrap.classList.add("invalid");
-    return;
-  }
   const button = document.querySelector("#login-button");
   button.disabled = true;
   button.innerHTML = `<span class="loading-spinner"></span><span>Verifying access…</span>`;
   try {
-    const session = await reviewAuth.signIn(username.value.trim(), password.value, remember.checked);
+    const session = await authApi.signIn(username.value.trim(), password.value, remember.checked);
     state.authenticated = true;
     state.currentUser = session;
     renderApp();
@@ -503,13 +496,17 @@ function bindGlobalEvents() {
     state.userMenuOpen = !state.userMenuOpen;
     renderApp();
   });
-  document.querySelector("#sign-out")?.addEventListener("click", () => {
-    reviewAuth.signOut();
-    state.authenticated = false;
-    state.currentUser = null;
-    state.userMenuOpen = false;
-    renderLogin();
-    showToast("Signed out of the CAMS review session.");
+  document.querySelector("#sign-out")?.addEventListener("click", async () => {
+    try {
+      await authApi.signOut();
+      state.authenticated = false;
+      state.currentUser = null;
+      state.userMenuOpen = false;
+      renderLogin();
+      showToast("Signed out securely.");
+    } catch (error) {
+      showToast(error.message);
+    }
   });
 }
 
@@ -562,11 +559,19 @@ function updateClock() {
 
 window.setInterval(() => { if (state.authenticated) updateClock(); }, 1000);
 
-const restoredSession = reviewAuth.restore();
-if (restoredSession) {
-  state.authenticated = true;
-  state.currentUser = restoredSession;
-  renderApp();
-} else {
+async function initializeAuthentication() {
+  try {
+    const restoredSession = await authApi.restore();
+    if (restoredSession) {
+      state.authenticated = true;
+      state.currentUser = restoredSession;
+      renderApp();
+      return;
+    }
+  } catch {
+    // An expired or unavailable session returns the user to the login screen.
+  }
   renderLogin();
 }
+
+initializeAuthentication();
