@@ -1,7 +1,8 @@
 const app = document.querySelector("#app");
 const toastRegion = document.querySelector("#toast-region");
 
-const API_BASE_URL = String(window.CAMS_CONFIG?.apiBaseUrl || "").replace(/\/$/, "");
+const configuredApiBaseUrl = String(window.CAMS_CONFIG?.apiBaseUrl || "");
+const API_BASE_URL = (configuredApiBaseUrl === "same-origin" ? window.location.origin : configuredApiBaseUrl).replace(/\/$/, "");
 
 function sessionUser(user) {
   return {
@@ -500,7 +501,7 @@ function renderApp() {
   const safeName = escapeHtml(user.displayName);
   const safeRole = escapeHtml(user.role);
   const groups = ["Monitor", "Manage", "Future"];
-  const connectionLabel = state.telemetryConnected ? "Live MQTT telemetry" : "Telemetry reconnecting";
+  const connectionLabel = state.telemetryConnected ? "Live telemetry stream" : "Telemetry reconnecting";
   const networkLabel = state.telemetryConnected ? "Plant network online" : "Waiting for live telemetry";
   const sidebarNav = groups.map(group => `<div class="nav-group-label">${group}</div><nav class="nav-list">${navItems.filter(item => item.group === group).map(item => `<button class="nav-item ${state.page === item.id || (state.page === "machine-detail" && item.id === "machines") ? "active" : ""}" data-page="${item.id}">${icon(item.icon)}<span>${item.label}</span>${item.future ? '<span class="future">P2</span>' : ""}</button>`).join("")}</nav>`).join("");
   app.innerHTML = `<div class="app-shell">
