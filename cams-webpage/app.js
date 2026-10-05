@@ -89,21 +89,10 @@ const iconPaths = {
 
 const icon = (name, className = "") => `<svg class="${className}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${iconPaths[name] || iconPaths.info}</svg>`;
 
-const machines = [
-  { id: "CAMS-01", name: "Compressor 01", zone: "Spinning · Line A", status: "Running", pressure: 7.2, temp: 38.5, flow: 25.6, suction: -0.8, health: 96, updated: "1 sec ago", hours: 6248 },
-  { id: "CAMS-02", name: "Compressor 02", zone: "Spinning · Line A", status: "Running", pressure: 7.1, temp: 40.1, flow: 24.8, suction: -0.7, health: 94, updated: "1 sec ago", hours: 5891 },
-  { id: "CAMS-03", name: "Compressor 03", zone: "Carding · Line B", status: "Alarm", pressure: 6.2, temp: 45.8, flow: 21.3, suction: -0.6, health: 71, updated: "2 sec ago", hours: 7142 },
-  { id: "CAMS-04", name: "Compressor 04", zone: "Carding · Line B", status: "Offline", pressure: null, temp: null, flow: null, suction: null, health: 0, updated: "12 min ago", hours: 4621 },
-  { id: "CAMS-05", name: "Compressor 05", zone: "Winding · Line C", status: "Running", pressure: 7.3, temp: 37.9, flow: 26.1, suction: -0.8, health: 98, updated: "1 sec ago", hours: 5107 },
-  { id: "CAMS-06", name: "Compressor 06", zone: "Winding · Line C", status: "Running", pressure: 7.0, temp: 39.4, flow: 24.3, suction: -0.9, health: 91, updated: "1 sec ago", hours: 6602 },
-  { id: "CAMS-07", name: "Compressor 07", zone: "Utility · North", status: "Stopped", pressure: 0.4, temp: 30.2, flow: 0, suction: -0.1, health: 88, updated: "3 sec ago", hours: 3985 },
-  { id: "CAMS-08", name: "Compressor 08", zone: "Utility · North", status: "Running", pressure: 7.2, temp: 38.2, flow: 25.1, suction: -0.8, health: 95, updated: "1 sec ago", hours: 5430 },
-  { id: "CAMS-09", name: "Compressor 09", zone: "Packing · South", status: "Running", pressure: 7.4, temp: 39.0, flow: 26.4, suction: -0.7, health: 93, updated: "2 sec ago", hours: 4766 },
-  { id: "CAMS-10", name: "Compressor 10", zone: "Packing · South", status: "Stopped", pressure: 0.5, temp: 31.0, flow: 0, suction: -0.1, health: 86, updated: "2 sec ago", hours: 3508 },
-  { id: "CAMS-11", name: "Compressor 11", zone: "Blow Room", status: "Running", pressure: 7.1, temp: 41.2, flow: 24.6, suction: -0.8, health: 89, updated: "1 sec ago", hours: 8092 },
-  { id: "CAMS-12", name: "Compressor 12", zone: "Blow Room", status: "Running", pressure: 7.3, temp: 38.8, flow: 25.9, suction: -0.9, health: 97, updated: "1 sec ago", hours: 2864 },
-  { id: "CAMS-13", name: "Compressor 13", zone: "Standby Bay", status: "Running", pressure: 6.9, temp: 39.7, flow: 23.9, suction: -0.7, health: 92, updated: "2 sec ago", hours: 2291 }
-];
+let machines = [];
+const machineHistory = new Map();
+let telemetryStream = null;
+let telemetryRenderTimer = null;
 
 let alarms = [
   { id: 1, time: "10:42:18", date: "Today", machine: "CAMS-03", parameter: "Temperature", value: "45.8 °C", severity: "Critical", status: "Active", message: "Discharge temperature above high limit" },
@@ -127,7 +116,9 @@ const state = {
   trendRange: "1h",
   mobileOpen: false,
   notificationsOpen: false,
-  userMenuOpen: false
+  userMenuOpen: false,
+  telemetryConnected: false,
+  lastTelemetryAt: null
 };
 
 const navItems = [
@@ -170,6 +161,185 @@ function initials(name = "Plant Owner") {
 
 function escapeHtml(value = "") {
   return String(value).replace(/[&<>'"]/g, character => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[character]));
+}
+
+function displayStatus(value = "offline") {
+  const normalized = String(value).trim().toLowerCase();
+  return normalized ? normalized[0].toUpperCase() + normalized.slice(1) : "Offline";
+}
+
+function relativeTime(value) {
+  if (!value) return "No telemetry";
+  const elapsed = Math.max(0, Date.now() - new Date(value).getTime());
+  if (!Number.isFinite(elapsed)) return "Unknown";
+  const seconds = Math.floor(elapsed / 1000);
+  if (seconds < 5) return "just now";
+  if (seconds < 60) return `${seconds} sec ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} h ago`;
+  return new Date(value).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+}
+
+function healthScore(status, metrics) {
+  if (status === "Offline") return 0;
+  if (status === "Stopped") return 85;
+  if (status === "Alarm") return 65;
+  if (!metrics) return 0;
+  let score = 100;
+  if (metrics.pressureBar < 6.8 || metrics.pressureBar > 7.5) score -= 12;
+  if (metrics.flowLpm < 22 || metrics.flowLpm > 28) score -= 8;
+  if (metrics.suctionBar < -1 || metrics.suctionBar > -0.5) score -= 8;
+  if (metrics.temperatureC > 43) score -= 18;
+  return Math.max(0, score);
+}
+
+function mapMachine(item) {
+  const telemetry = item.telemetry || null;
+  const metrics = telemetry?.metrics || null;
+  const status = displayStatus(telemetry?.status || item.status);
+  const receivedAt = telemetry?.receivedAt || item.lastSeenAt || null;
+  return {
+    id: item.id,
+    siteId: item.siteId || "demo",
+    name: item.name || item.id,
+    zone: item.zone || "Unassigned",
+    status,
+    pressure: metrics?.pressureBar ?? null,
+    temp: metrics?.temperatureC ?? null,
+    flow: metrics?.flowLpm ?? null,
+    suction: metrics?.suctionBar ?? null,
+    health: healthScore(status, metrics),
+    updated: relativeTime(receivedAt),
+    receivedAt,
+    hours: null
+  };
+}
+
+function normalizeReading(payload) {
+  return {
+    siteId: payload.siteId || payload.series?.siteId || "demo",
+    machineId: payload.machineId || payload.series?.machineId,
+    observedAt: payload.observedAt,
+    receivedAt: payload.receivedAt,
+    sequence: payload.sequence,
+    status: payload.status,
+    metrics: payload.metrics
+  };
+}
+
+function appendHistory(payload) {
+  const reading = normalizeReading(payload);
+  if (!reading.machineId || !reading.metrics) return;
+  const current = machineHistory.get(reading.machineId) || [];
+  const deduplicated = current.filter(item => item.sequence !== reading.sequence || item.observedAt !== reading.observedAt);
+  deduplicated.push(reading);
+  deduplicated.sort((a, b) => new Date(a.observedAt) - new Date(b.observedAt));
+  machineHistory.set(reading.machineId, deduplicated.slice(-2000));
+}
+
+async function loadMachines({ render = true } = {}) {
+  const payload = await authApi.request("/api/machines");
+  machines = (payload.machines || []).map(mapMachine);
+  for (const item of payload.machines || []) {
+    if (item.telemetry) appendHistory(item.telemetry);
+  }
+  const newest = machines
+    .map(machine => machine.receivedAt)
+    .filter(Boolean)
+    .sort((a, b) => new Date(b) - new Date(a))[0];
+  if (newest) state.lastTelemetryAt = newest;
+  if (!machines.some(machine => machine.id === state.machineId) && machines[0]) state.machineId = machines[0].id;
+  if (!machines.some(machine => machine.id === state.trendMachine) && machines[0]) state.trendMachine = machines[0].id;
+  if (render) renderApp();
+}
+
+function historyRangeMilliseconds(range) {
+  return ({ "15m": 15 * 60e3, "1h": 60 * 60e3, "6h": 6 * 60 * 60e3, "24h": 24 * 60 * 60e3, "7d": 7 * 24 * 60 * 60e3 })[range] || 60 * 60e3;
+}
+
+async function loadMachineHistory(machineId, range = "1h", { render = true } = {}) {
+  const machine = machines.find(item => item.id === machineId);
+  if (!machine) return;
+  const from = new Date(Date.now() - historyRangeMilliseconds(range)).toISOString();
+  const params = new URLSearchParams({ siteId: machine.siteId, from, limit: "2000" });
+  const payload = await authApi.request(`/api/machines/${encodeURIComponent(machineId)}/telemetry?${params}`);
+  machineHistory.set(machineId, []);
+  for (const reading of payload.readings || []) appendHistory(reading);
+  if (render && state.authenticated) renderApp();
+}
+
+function applyTelemetry(payload) {
+  const reading = normalizeReading(payload);
+  if (!reading.machineId || !reading.metrics) return;
+  appendHistory(reading);
+  const index = machines.findIndex(machine => machine.id === reading.machineId && machine.siteId === reading.siteId);
+  const existing = index >= 0 ? machines[index] : {
+    id: reading.machineId,
+    siteId: reading.siteId,
+    name: reading.machineId,
+    zone: "Unassigned"
+  };
+  const updated = mapMachine({
+    ...existing,
+    telemetry: reading,
+    status: reading.status,
+    lastSeenAt: reading.receivedAt
+  });
+  if (index >= 0) machines[index] = updated;
+  else machines.push(updated);
+  state.lastTelemetryAt = reading.receivedAt || new Date().toISOString();
+  scheduleTelemetryRender();
+}
+
+function scheduleTelemetryRender() {
+  if (telemetryRenderTimer || !state.authenticated) return;
+  telemetryRenderTimer = window.setTimeout(() => {
+    telemetryRenderTimer = null;
+    if (document.activeElement?.id !== "machine-search") renderApp();
+  }, 250);
+}
+
+function closeTelemetryStream() {
+  telemetryStream?.close();
+  telemetryStream = null;
+  state.telemetryConnected = false;
+  if (telemetryRenderTimer) window.clearTimeout(telemetryRenderTimer);
+  telemetryRenderTimer = null;
+}
+
+function connectTelemetryStream() {
+  closeTelemetryStream();
+  if (!API_BASE_URL || typeof EventSource === "undefined") return;
+  telemetryStream = new EventSource(`${API_BASE_URL}/api/telemetry/stream`, { withCredentials: true });
+  telemetryStream.addEventListener("connected", () => {
+    state.telemetryConnected = true;
+    scheduleTelemetryRender();
+  });
+  telemetryStream.addEventListener("telemetry", event => {
+    state.telemetryConnected = true;
+    try {
+      applyTelemetry(JSON.parse(event.data));
+    } catch {
+      // Ignore a malformed event while keeping the stream open for the next valid reading.
+    }
+  });
+  telemetryStream.onerror = () => {
+    state.telemetryConnected = false;
+    scheduleTelemetryRender();
+  };
+}
+
+async function enterApplication(user) {
+  state.authenticated = true;
+  state.currentUser = user;
+  await loadMachines({ render: false });
+  if (machines[0]) {
+    await loadMachineHistory(machines[0].id, "1h", { render: false }).catch(() => {});
+  }
+  renderApp();
+  connectTelemetryStream();
 }
 
 function renderLogin() {
@@ -261,9 +431,7 @@ async function handleLogin(event) {
   button.innerHTML = `<span class="loading-spinner"></span><span>Verifying access…</span>`;
   try {
     const session = await authApi.signIn(username.value.trim(), password.value, remember.checked);
-    state.authenticated = true;
-    state.currentUser = session;
-    renderApp();
+    await enterApplication(session);
     showToast("Signed in successfully. Plant data is ready.");
   } catch (error) {
     password.value = "";
@@ -280,22 +448,24 @@ function renderApp() {
   const safeName = escapeHtml(user.displayName);
   const safeRole = escapeHtml(user.role);
   const groups = ["Monitor", "Manage", "Future"];
+  const connectionLabel = state.telemetryConnected ? "Live MQTT telemetry" : "Telemetry reconnecting";
+  const networkLabel = state.telemetryConnected ? "Plant network online" : "Waiting for live telemetry";
   const sidebarNav = groups.map(group => `<div class="nav-group-label">${group}</div><nav class="nav-list">${navItems.filter(item => item.group === group).map(item => `<button class="nav-item ${state.page === item.id || (state.page === "machine-detail" && item.id === "machines") ? "active" : ""}" data-page="${item.id}">${icon(item.icon)}<span>${item.label}</span>${item.future ? '<span class="future">P2</span>' : ""}</button>`).join("")}</nav>`).join("");
   app.innerHTML = `<div class="app-shell">
     ${state.mobileOpen ? '<button class="mobile-overlay" id="mobile-overlay" aria-label="Close menu"></button>' : ""}
     <aside class="sidebar ${state.mobileOpen ? "open" : ""}">
       ${brand(true)}
       ${sidebarNav}
-      <div class="sidebar-foot"><div class="sidebar-foot-row"><i class="pulse-dot"></i><span>All systems connected</span></div><div class="sidebar-foot-row"><span>UI prototype · Mock data</span></div></div>
+      <div class="sidebar-foot"><div class="sidebar-foot-row"><i class="pulse-dot"></i><span>${connectionLabel}</span></div><div class="sidebar-foot-row"><span>MongoDB-backed monitoring</span></div></div>
     </aside>
     <header class="top-header">
-      <div class="header-plant"><button class="icon-btn mobile-menu" id="mobile-menu" aria-label="Open menu">${icon("menu")}</button><div><div class="plant-name">Demo Spinning Plant</div><div class="plant-meta"><i class="live-dot"></i><span>Plant network online</span></div></div></div>
+      <div class="header-plant"><button class="icon-btn mobile-menu" id="mobile-menu" aria-label="Open menu">${icon("menu")}</button><div><div class="plant-name">Demo Spinning Plant</div><div class="plant-meta"><i class="live-dot"></i><span>${networkLabel}</span></div></div></div>
       <div class="header-right">
         <div class="clock"><strong id="header-time">--:--:--</strong><span id="header-date">--</span></div>
         <button class="icon-btn notification-btn" id="notification-button" aria-label="Notifications">${icon("bell")}<span class="notification-badge">2</span></button>
         <div class="account-control">
           <button class="user-menu" id="user-menu" aria-haspopup="menu" aria-expanded="${state.userMenuOpen}"><span class="avatar">${escapeHtml(initials(user.displayName))}</span><span class="user-copy"><strong>${safeName}</strong><span>${safeRole}</span></span>${icon("chevronDown")}</button>
-          ${state.userMenuOpen ? `<div class="account-menu" role="menu"><div class="account-summary"><span class="avatar">${escapeHtml(initials(user.displayName))}</span><div><strong>${safeName}</strong><span>${escapeHtml(user.identity)}</span></div></div><div class="account-session">${icon("shield")}<span>Review session active</span></div><button id="sign-out" class="account-action" role="menuitem">${icon("logout")}<span>Sign out</span></button></div>` : ""}
+          ${state.userMenuOpen ? `<div class="account-menu" role="menu"><div class="account-summary"><span class="avatar">${escapeHtml(initials(user.displayName))}</span><div><strong>${safeName}</strong><span>${escapeHtml(user.identity)}</span></div></div><div class="account-session">${icon("shield")}<span>Secure server session active</span></div><button id="sign-out" class="account-action" role="menuitem">${icon("logout")}<span>Sign out</span></button></div>` : ""}
         </div>
       </div>
     </header>
@@ -324,25 +494,45 @@ function pageHead(title, subtitle, actions = "") {
   return `<div class="page-head"><div><h1>${title}</h1><p>${subtitle}</p></div>${actions ? `<div class="page-actions">${actions}</div>` : ""}</div>`;
 }
 
-function chartSvg(parameter = "Pressure", pointsCount = 24) {
-  const configs = {
-    Pressure: { min: 6.6, max: 7.8, unit: "bar", base: 7.18, amp: .27 },
-    Flow: { min: 20, max: 30, unit: "L/min", base: 25.3, amp: 2.1 },
-    Suction: { min: -1.1, max: -.3, unit: "bar", base: -.76, amp: .16 },
-    Temperature: { min: 34, max: 46, unit: "°C", base: 39.1, amp: 2.3 }
-  };
-  const c = configs[parameter] || configs.Pressure;
-  const values = Array.from({ length: pointsCount }, (_, index) => c.base + Math.sin(index * .72) * c.amp + Math.cos(index * .27) * c.amp * .35 + ((index % 5) - 2) * c.amp * .06);
+const parameterConfig = {
+  Pressure: { field: "pressureBar", unit: "bar", fallbackSpan: 1.2 },
+  Flow: { field: "flowLpm", unit: "L/min", fallbackSpan: 10 },
+  Suction: { field: "suctionBar", unit: "bar", fallbackSpan: 0.8 },
+  Temperature: { field: "temperatureC", unit: "°C", fallbackSpan: 12 }
+};
+
+function historyFor(machineId, parameter) {
+  const config = parameterConfig[parameter] || parameterConfig.Pressure;
+  return (machineHistory.get(machineId) || [])
+    .map(reading => ({ value: Number(reading.metrics?.[config.field]), observedAt: reading.observedAt }))
+    .filter(point => Number.isFinite(point.value));
+}
+
+function chartSvg(parameter = "Pressure", readings = []) {
+  const c = parameterConfig[parameter] || parameterConfig.Pressure;
+  if (!readings.length) return `<div class="empty-state">${icon("pulse")}Waiting for live telemetry history.</div>`;
+  const pointsToPlot = readings.length === 1 ? [readings[0], readings[0]] : readings;
+  const values = pointsToPlot.map(point => point.value);
+  const actualMin = Math.min(...values);
+  const actualMax = Math.max(...values);
+  const padding = Math.max((actualMax - actualMin) * 0.15, c.fallbackSpan * 0.08);
+  const min = actualMin - padding;
+  const max = actualMax + padding;
   const x = i => 48 + i * (632 / (values.length - 1));
-  const y = value => 18 + ((c.max - value) / (c.max - c.min)) * 178;
+  const y = value => 18 + ((max - value) / (max - min)) * 178;
   const points = values.map((value, i) => `${x(i).toFixed(1)},${y(value).toFixed(1)}`).join(" ");
   const areaPoints = `48,196 ${points} 680,196`;
   const grid = [0, 1, 2, 3, 4].map(i => {
     const gy = 18 + i * 44.5;
-    const label = (c.max - i * ((c.max - c.min) / 4)).toFixed(c.max < 10 ? 1 : 0);
+    const label = (max - i * ((max - min) / 4)).toFixed(Math.abs(max) < 10 ? 1 : 0);
     return `<line class="chart-grid-line" x1="48" y1="${gy}" x2="680" y2="${gy}"/><text class="chart-label" x="3" y="${gy + 4}">${label}</text>`;
   }).join("");
-  const times = [[48, "09:45"], [206, "10:00"], [364, "10:15"], [522, "10:30"], [680, "10:45"]].map(([tx, label], i) => `<text class="chart-label" x="${tx}" y="220" text-anchor="${i === 0 ? "start" : i === 4 ? "end" : "middle"}">${label}</text>`).join("");
+  const timeAt = ratio => {
+    const index = Math.min(pointsToPlot.length - 1, Math.round((pointsToPlot.length - 1) * ratio));
+    const value = pointsToPlot[index].observedAt;
+    return value ? new Date(value).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }) : "—";
+  };
+  const times = [0, .25, .5, .75, 1].map((ratio, i) => `<text class="chart-label" x="${48 + 632 * ratio}" y="220" text-anchor="${i === 0 ? "start" : i === 4 ? "end" : "middle"}">${timeAt(ratio)}</text>`).join("");
   const lastX = x(values.length - 1), lastY = y(values.at(-1));
   return `<svg viewBox="0 0 700 228" preserveAspectRatio="none" role="img" aria-label="${parameter} trend chart"><defs><linearGradient id="chartFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#42b7a4" stop-opacity=".34"/><stop offset="100%" stop-color="#42b7a4" stop-opacity=".02"/></linearGradient></defs>${grid}<polygon class="chart-area" points="${areaPoints}"/><polyline class="chart-line" points="${points}"/><circle class="chart-point" cx="${lastX}" cy="${lastY}" r="4"/>${times}<text class="chart-label" x="3" y="12">${c.unit}</text></svg>`;
 }
@@ -350,27 +540,33 @@ function chartSvg(parameter = "Pressure", pointsCount = 24) {
 function dashboardPage() {
   const running = machines.filter(m => m.status === "Running" || m.status === "Alarm").length;
   const stopped = machines.filter(m => m.status === "Stopped" || m.status === "Offline").length;
+  const stoppedCount = machines.filter(m => m.status === "Stopped").length;
+  const offlineCount = machines.filter(m => m.status === "Offline").length;
+  const availability = machines.length ? Math.round(running / machines.length * 100) : 0;
+  const snapshot = machines.find(machine => machine.id === "CAMS-01") || machines[0] || null;
+  const snapshotHistory = snapshot ? historyFor(snapshot.id, "Pressure") : [];
   const compactMachines = machines.slice(0, 6).map((machine, index) => `<button class="machine-compact" data-machine="${machine.id}"><span class="machine-num">${String(index + 1).padStart(2, "0")}</span><span><strong>${machine.id}</strong><small>${machine.zone}</small></span>${statusPill(machine.status)}</button>`).join("");
   const alarmItems = alarms.slice(0, 4).map(alarm => `<div class="alarm-item"><span class="severity-icon ${alarm.severity.toLowerCase()}">${icon(alarm.severity === "Critical" ? "alarm" : "info")}</span><div><strong>${alarm.machine} · ${alarm.parameter}</strong><p>${alarm.message}</p></div><div class="alarm-time"><strong>${alarm.time}</strong><span>${alarm.date}</span></div></div>`).join("");
-  return `${pageHead("Plant overview", "Real-time compressor status across Demo Spinning Plant", `<span class="updated-note"><i class="pulse-dot"></i>Live · updated now</span><button class="secondary-btn" id="refresh-dashboard">${icon("refresh")} Refresh</button>`)}
+  const liveLabel = state.lastTelemetryAt ? `Live · ${relativeTime(state.lastTelemetryAt)}` : "Waiting for telemetry";
+  return `${pageHead("Plant overview", "Real-time compressor status across Demo Spinning Plant", `<span class="updated-note"><i class="pulse-dot"></i>${liveLabel}</span><button class="secondary-btn" id="refresh-dashboard">${icon("refresh")} Refresh</button>`)}
     <section class="kpi-grid">
       ${kpi("Total machines", machines.length, "Connected fleet", "machine", "teal")}
-      ${kpi("Running", running, `${Math.round(running / machines.length * 100)}% available`, "gauge", "green")}
-      ${kpi("Stopped / offline", stopped, "2 stopped · 1 offline", "stop", "slate")}
+      ${kpi("Running", running, `${availability}% available`, "gauge", "green")}
+      ${kpi("Stopped / offline", stopped, `${stoppedCount} stopped · ${offlineCount} offline`, "stop", "slate")}
       ${kpi("Active alarms", 2, "2 require attention", "alarm", "red")}
     </section>
     <section class="dashboard-grid">
       <article class="panel">
-        <header class="panel-head"><div class="panel-title"><h2>Live operating snapshot</h2><p>CAMS-01 · Compressor 01</p></div><button class="panel-link" data-machine="CAMS-01">View machine →</button></header>
+        <header class="panel-head"><div class="panel-title"><h2>Live operating snapshot</h2><p>${snapshot ? `${snapshot.id} · ${snapshot.name}` : "No connected machine"}</p></div>${snapshot ? `<button class="panel-link" data-machine="${snapshot.id}">View machine →</button>` : ""}</header>
         <div class="panel-body">
-          <div class="sensor-row">${sensorMini("Flow", "25.6", "L/min")}${sensorMini("Pressure", "7.2", "bar")}${sensorMini("Suction", "−0.8", "bar")}${sensorMini("Temperature", "38.5", "°C")}</div>
-          <div class="chart-toolbar"><div class="chart-legend"><i class="legend-line"></i>Pressure · CAMS-01</div><div class="segment-control"><button>15m</button><button class="active">1h</button><button>6h</button><button>24h</button></div></div>
-          <div class="chart">${chartSvg("Pressure")}</div>
+          <div class="sensor-row">${sensorMini("Flow", snapshot ? fmt(snapshot.flow) : "—", "L/min")}${sensorMini("Pressure", snapshot ? fmt(snapshot.pressure) : "—", "bar")}${sensorMini("Suction", snapshot ? fmt(snapshot.suction) : "—", "bar")}${sensorMini("Temperature", snapshot ? fmt(snapshot.temp) : "—", "°C")}</div>
+          <div class="chart-toolbar"><div class="chart-legend"><i class="legend-line"></i>Pressure · ${snapshot?.id || "—"}</div><div class="segment-control"><button>15m</button><button class="active">1h</button><button>6h</button><button>24h</button></div></div>
+          <div class="chart">${chartSvg("Pressure", snapshotHistory)}</div>
         </div>
       </article>
       <article class="panel">
-        <header class="panel-head"><div class="panel-title"><h2>Machine health</h2><p>Fleet status at a glance</p></div><button class="panel-link" data-page="machines">View all 13 →</button></header>
-        <div class="panel-body"><div class="machine-list">${compactMachines}</div></div>
+        <header class="panel-head"><div class="panel-title"><h2>Machine health</h2><p>Fleet status at a glance</p></div><button class="panel-link" data-page="machines">View all ${machines.length} →</button></header>
+        <div class="panel-body"><div class="machine-list">${compactMachines || `<div class="empty-state">${icon("machine")}No machines are registered.</div>`}</div></div>
       </article>
     </section>
     <section class="panel">
@@ -396,15 +592,17 @@ function machinesPage() {
     <td><div class="health-score"><div class="health-bar"><span style="width:${machine.health}%"></span></div><small>${machine.health ? `${machine.health}%` : "—"}</small></div></td>
     <td><button class="row-action" data-machine="${machine.id}">View details</button></td>
   </tr>`).join("");
-  return `${pageHead("Machines", "Monitor and compare all 13 connected compressor systems", `<button class="secondary-btn" id="export-machines">${icon("download")} Export list</button>`)}
+  return `${pageHead("Machines", `Monitor and compare ${machines.length} connected compressor systems`, `<button class="secondary-btn" id="export-machines">${icon("download")} Export list</button>`)}
     <div class="filter-bar"><div class="search-wrap">${icon("search")}<input id="machine-search" type="search" value="${state.machineSearch}" placeholder="Search ID, name or area…"></div><div class="filter-pills">${filters}</div></div>
     <section class="panel"><div class="table-wrap"><table class="data-table"><thead><tr><th>Machine</th><th>Status</th><th>Pressure</th><th>Temperature</th><th>Last update</th><th>Health</th><th>Action</th></tr></thead><tbody>${rows || `<tr><td colspan="7"><div class="empty-state">${icon("search")}No machines match this filter.</div></td></tr>`}</tbody></table></div></section>`;
 }
 
 function machineDetailPage() {
   const machine = machines.find(item => item.id === state.machineId) || machines[0];
-  const value = (key, unit) => machine[key] === null ? "—" : `${machine[key]} <small>${unit}</small>`;
+  if (!machine) return `${pageHead("Machine details", "No machine is currently available")}<div class="empty-state">${icon("machine")}Register a machine and publish telemetry to view details.</div>`;
+  const value = (key, unit) => machine[key] === null || machine[key] === undefined ? "—" : `${machine[key]} <small>${unit}</small>`;
   const related = alarms.filter(alarm => alarm.machine === machine.id).slice(0, 3);
+  const pressureHistory = historyFor(machine.id, "Pressure");
   return `<button class="back-link" data-page="machines">${icon("arrowLeft")} Back to machines</button>
     ${pageHead(`<span class="machine-head-title">${machine.id} ${statusPill(machine.status === "Offline" ? "Offline" : "Online")}</span>`, `${machine.name} · ${machine.zone}`, `<button class="secondary-btn" id="export-machine">${icon("download")} Export data</button>`)}
     <div class="meta-line"><span>${icon("gauge")} Mode: ${machine.status}</span><span>${icon("clock")} Last update: ${machine.updated}</span><span>${icon("wifi")} Communication: ${machine.status === "Offline" ? "Interrupted" : "Stable · 98%"}</span></div>
@@ -416,10 +614,10 @@ function machineDetailPage() {
       ${sensorCard("Temperature", value("temp", "°C"), "Warning above 43 °C")}
     </section>
     <section class="detail-grid">
-      <article class="panel"><header class="panel-head"><div class="panel-title"><h2>Operating trend</h2><p>Pressure · last 60 minutes</p></div><div class="segment-control"><button>15m</button><button class="active">1h</button><button>6h</button><button>24h</button></div></header><div class="panel-body"><div class="chart tall">${chartSvg("Pressure", 32)}</div></div></article>
+      <article class="panel"><header class="panel-head"><div class="panel-title"><h2>Operating trend</h2><p>Pressure · last 60 minutes</p></div><div class="segment-control"><button>15m</button><button class="active">1h</button><button>6h</button><button>24h</button></div></header><div class="panel-body"><div class="chart tall">${chartSvg("Pressure", pressureHistory)}</div></div></article>
       <div class="info-stack">
         <article class="panel"><header class="panel-head"><div class="panel-title"><h2>Machine health</h2><p>Current operating state</p></div></header><div class="state-list"><div class="state-row"><span>Operation</span>${statusPill(machine.status)}</div><div class="state-row"><span>PLC link</span>${statusPill(machine.status === "Offline" ? "Offline" : "Online")}</div><div class="state-row"><span>Gateway</span>${statusPill(machine.status === "Offline" ? "Offline" : "Online")}</div><div class="state-row"><span>Overall health</span><strong>${machine.health ? `${machine.health}%` : "—"}</strong></div></div></article>
-        <article class="panel"><header class="panel-head"><div class="panel-title"><h2>Service summary</h2><p>Preventive maintenance</p></div></header><div class="service-progress"><div class="service-big"><strong>${machine.hours.toLocaleString()} h</strong><span>Running hours</span></div><div class="progress-track"><span style="width:72%"></span></div><div class="service-dates"><span>Last service · 14 Aug 2026</span><span>Next · 6,500 h</span></div></div></article>
+        <article class="panel"><header class="panel-head"><div class="panel-title"><h2>Service summary</h2><p>Preventive maintenance</p></div></header><div class="service-progress"><div class="service-big"><strong>${machine.hours === null ? "—" : `${machine.hours.toLocaleString()} h`}</strong><span>Running hours</span></div><div class="progress-track"><span style="width:0%"></span></div><div class="service-dates"><span>Service records not connected</span><span>Maintenance module · next phase</span></div></div></article>
         <article class="panel"><header class="panel-head"><div class="panel-title"><h2>Alarm summary</h2><p>${related.length} recent event${related.length === 1 ? "" : "s"}</p></div><button class="panel-link" data-page="alarms">View all →</button></header><div class="alarm-list">${related.length ? related.map(alarm => `<div class="alarm-item"><span class="severity-icon ${alarm.severity.toLowerCase()}">${icon("alarm")}</span><div><strong>${alarm.parameter} · ${alarm.value}</strong><p>${alarm.message}</p></div></div>`).join("") : `<div class="empty-state">${icon("check")}No recent alarms for this machine.</div>`}</div></article>
       </div>
     </section>`;
@@ -431,25 +629,27 @@ function sensorCard(label, value, range) {
 
 function trendsPage() {
   const machine = machines.find(item => item.id === state.trendMachine) || machines[0];
-  const parameterValues = {
-    Pressure: [machine.pressure ?? 0, 6.81, 7.48, 7.17, "bar"],
-    Flow: [machine.flow ?? 0, 22.7, 27.8, 25.2, "L/min"],
-    Suction: [machine.suction ?? 0, -1.0, -0.52, -0.76, "bar"],
-    Temperature: [machine.temp ?? 0, 35.8, 42.3, 39.1, "°C"]
-  }[state.trendParameter];
+  if (!machine) return `${pageHead("Trends & analytics", "No machine telemetry is available")}<div class="empty-state">${icon("trend")}Publish telemetry to begin charting.</div>`;
+  const history = historyFor(machine.id, state.trendParameter);
+  const values = history.map(point => point.value);
+  const current = values.at(-1) ?? null;
+  const minimum = values.length ? Math.min(...values) : null;
+  const maximum = values.length ? Math.max(...values) : null;
+  const average = values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
+  const unit = (parameterConfig[state.trendParameter] || parameterConfig.Pressure).unit;
   const selects = machines.map(m => `<option value="${m.id}" ${m.id === state.trendMachine ? "selected" : ""}>${m.id} · ${m.name}</option>`).join("");
   const parameters = ["Pressure", "Flow", "Suction", "Temperature"].map(parameter => `<option value="${parameter}" ${parameter === state.trendParameter ? "selected" : ""}>${parameter}</option>`).join("");
   const ranges = ["15m", "1h", "6h", "24h", "7d", "Custom"].map(range => `<button class="${state.trendRange === range ? "active" : ""}" data-range="${range}">${range}</button>`).join("");
   return `${pageHead("Trends & analytics", "Explore live and historical operating parameters", `<button class="secondary-btn" id="export-trend">${icon("download")} Export chart</button>`)}
     <section class="trend-controls"><div class="control-group grow"><label>Machine</label><div class="select-wrap"><select id="trend-machine">${selects}</select>${icon("chevronDown")}</div></div><div class="control-group"><label>Parameter</label><div class="select-wrap"><select id="trend-parameter">${parameters}</select>${icon("chevronDown")}</div></div><div class="control-group grow"><label>Time range</label><div class="range-pills">${ranges}</div></div></section>
     <article class="panel"><header class="panel-head"><div class="panel-title"><h2>${state.trendParameter} history</h2><p>${machine.id} · ${state.trendRange === "Custom" ? "custom range preview" : `last ${state.trendRange}`}</p></div><span class="updated-note"><i class="pulse-dot"></i>Live sampling</span></header>
-      <div class="panel-body"><div class="chart tall">${chartSvg(state.trendParameter, 40)}</div></div>
-      <div class="trend-stat-grid">${trendStat("Current", parameterValues[0], parameterValues[4])}${trendStat("Minimum", parameterValues[1], parameterValues[4])}${trendStat("Maximum", parameterValues[2], parameterValues[4])}${trendStat("Average", parameterValues[3], parameterValues[4])}</div>
+      <div class="panel-body"><div class="chart tall">${chartSvg(state.trendParameter, history)}</div></div>
+      <div class="trend-stat-grid">${trendStat("Current", current, unit)}${trendStat("Minimum", minimum, unit)}${trendStat("Maximum", maximum, unit)}${trendStat("Average", average, unit)}</div>
     </article>`;
 }
 
 function trendStat(label, value, unit) {
-  return `<div class="trend-stat"><span>${label}</span><strong>${Number(value).toFixed(1)} <small>${unit}</small></strong></div>`;
+  return `<div class="trend-stat"><span>${label}</span><strong>${value === null ? "—" : Number(value).toFixed(1)} <small>${unit}</small></strong></div>`;
 }
 
 function alarmsPage() {
@@ -488,6 +688,7 @@ function bindGlobalEvents() {
     event.stopPropagation();
     state.machineId = button.dataset.machine;
     navigate("machine-detail");
+    loadMachineHistory(state.machineId, "1h").catch(error => showToast(error.message));
   }));
   document.querySelector("#mobile-menu")?.addEventListener("click", () => { state.mobileOpen = true; renderApp(); });
   document.querySelector("#mobile-overlay")?.addEventListener("click", () => { state.mobileOpen = false; renderApp(); });
@@ -499,6 +700,7 @@ function bindGlobalEvents() {
   document.querySelector("#sign-out")?.addEventListener("click", async () => {
     try {
       await authApi.signOut();
+      closeTelemetryStream();
       state.authenticated = false;
       state.currentUser = null;
       state.userMenuOpen = false;
@@ -511,7 +713,17 @@ function bindGlobalEvents() {
 }
 
 function bindPageEvents() {
-  document.querySelector("#refresh-dashboard")?.addEventListener("click", () => { showToast("Live mock readings refreshed."); renderApp(); });
+  document.querySelector("#refresh-dashboard")?.addEventListener("click", async () => {
+    try {
+      await loadMachines({ render: false });
+      const snapshot = machines.find(machine => machine.id === "CAMS-01") || machines[0];
+      if (snapshot) await loadMachineHistory(snapshot.id, "1h", { render: false });
+      renderApp();
+      showToast("Live readings refreshed from the CAMS API.");
+    } catch (error) {
+      showToast(error.message);
+    }
+  });
   document.querySelector("#machine-search")?.addEventListener("input", event => {
     state.machineSearch = event.target.value;
     const position = event.target.selectionStart;
@@ -528,9 +740,17 @@ function bindPageEvents() {
     const alarm = alarms.find(item => item.id === Number(button.dataset.viewAlarm));
     showToast(`${alarm.machine}: ${alarm.message}`);
   }));
-  document.querySelector("#trend-machine")?.addEventListener("change", event => { state.trendMachine = event.target.value; renderApp(); });
+  document.querySelector("#trend-machine")?.addEventListener("change", event => {
+    state.trendMachine = event.target.value;
+    renderApp();
+    loadMachineHistory(state.trendMachine, state.trendRange).catch(error => showToast(error.message));
+  });
   document.querySelector("#trend-parameter")?.addEventListener("change", event => { state.trendParameter = event.target.value; renderApp(); });
-  document.querySelectorAll("[data-range]").forEach(button => button.addEventListener("click", () => { state.trendRange = button.dataset.range; renderApp(); }));
+  document.querySelectorAll("[data-range]").forEach(button => button.addEventListener("click", () => {
+    state.trendRange = button.dataset.range;
+    renderApp();
+    loadMachineHistory(state.trendMachine, state.trendRange).catch(error => showToast(error.message));
+  }));
   document.querySelectorAll(".toggle").forEach(button => button.addEventListener("click", () => button.classList.toggle("on")));
   document.querySelector("#save-settings")?.addEventListener("click", () => showToast("Interface preferences saved for review."));
   ["#export-machines", "#export-machine", "#export-trend", "#export-alarms"].forEach(selector => document.querySelector(selector)?.addEventListener("click", () => showToast("Export prepared in this UI prototype.")));
@@ -546,6 +766,9 @@ function navigate(page) {
   state.page = page;
   state.mobileOpen = false;
   renderApp();
+  if (page === "trends" && state.trendMachine) {
+    loadMachineHistory(state.trendMachine, state.trendRange).catch(error => showToast(error.message));
+  }
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
@@ -563,9 +786,7 @@ async function initializeAuthentication() {
   try {
     const restoredSession = await authApi.restore();
     if (restoredSession) {
-      state.authenticated = true;
-      state.currentUser = restoredSession;
-      renderApp();
+      await enterApplication(restoredSession);
       return;
     }
   } catch {

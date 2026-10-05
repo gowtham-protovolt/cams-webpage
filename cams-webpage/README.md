@@ -8,8 +8,9 @@ login experience, a plant dashboard, 13 compressor records, machine details,
 parameter trends, alarms, and preview screens for later modules.
 
 The objective is to deliver the monitoring interface in controlled stages. The
-current branch connects the login screen to the CAMS API and its MongoDB-backed
-server sessions while retaining mock compressor data until MQTT integration.
+current branch connects login, machine inventory, current readings, and
+historical trend charts to the CAMS API. Live MQTT readings reach the browser
+through an authenticated server-sent event stream.
 
 ## Responsible team member
 
@@ -22,8 +23,9 @@ results, status updates, and helping reviewers understand the UI.
 
 **In Progress**
 
-The review-stage UI is complete. Real authentication works in the local
-integration environment. Production API and MongoDB hosting are not configured.
+The review-stage UI and its local real-data path are complete. Authentication,
+MongoDB, MQTT ingestion, protected telemetry APIs, and live dashboard updates
+work in the local integration environment. Production services are not configured.
 
 ## Hardware requirements
 
@@ -89,8 +91,8 @@ From `cams-webpage/`, run:
 npm test
 ```
 
-Expected result: all required files, page metadata, mock machine records,
-responsive rules, and core UI modules pass validation.
+Expected result: all required files, page metadata, API and event-stream
+connections, responsive rules, and core UI modules pass validation.
 
 ### Manual UI test
 
@@ -99,10 +101,12 @@ responsive rules, and core UI modules pass validation.
 3. Sign in with a real account stored in MongoDB.
 4. Reload the page and verify the server session is restored.
 5. Open the account menu and verify Sign out revokes the server session.
-6. Verify the dashboard shows 13 machines and four KPI cards.
+6. Start the telemetry simulator and verify the dashboard shows the machines
+   registered in MongoDB and four KPI cards.
 7. Open Machines and test search and every status filter.
 8. Open a machine and verify its sensors, trend, health, service, and alarms.
-9. Change machine, parameter, and time range on Trends.
+9. Change machine, parameter, and time range on Trends and verify the chart and
+   statistics use stored telemetry readings.
 10. Filter alarms and test View, Acknowledge, and Resolve.
 11. Review Maintenance, Reports, Settings, and Energy preview screens.
 12. Repeat at tablet and mobile widths, including the mobile sidebar.
@@ -110,32 +114,36 @@ responsive rules, and core UI modules pass validation.
 
 ### Recorded test result
 
-- **Configuration:** Local CAMS API, MongoDB 7.0.43, static UI, mock telemetry,
-  current Chromium browser
+- **Configuration:** Local CAMS API, MongoDB 7.0.43, Mosquitto 2.0.22, MQTT
+  simulator, static UI, current Chromium browser
 - **Date:** 2026-10-05
 - **Responsible:** CAMS Project Team
 - **Expected result:** Invalid credentials fail; a valid MongoDB account signs
-  in, survives reload, and is revoked on logout
-- **Observed result:** Passed the full browser authentication flow and all 18
-  UI structural checks
+  in; MQTT data appears in the machine list and charts; the session survives
+  reload and is revoked on logout
+- **Observed result:** All 20 UI checks and all 9 API tests passed. A browser
+  session restored after reload, loaded 13 MongoDB machines, received a live
+  MQTT cycle through SSE, and displayed stored pressure statistics.
 
 ## Current status
 
 - UI design: implemented
 - Responsive layout: implemented
-- Mock compressor fleet: implemented
+- MongoDB-backed compressor fleet: implemented locally
 - Review interactions: implemented
 - Compact E7 powered-by mark: implemented
 - MongoDB-backed login and server sign-out: implemented locally
 - Automated structural checks: implemented
 - Authentication API integration: implemented locally
-- MQTT integration: not started
+- MQTT integration: implemented locally
+- Live dashboard and stored trend integration: implemented locally
 - Authentication database integration: implemented locally
 - Production authentication deployment: not started
 
 ## Known issues and limitations
 
-- All readings, events, timestamps, and statistics are mock data.
+- The included simulator produces synthetic readings for local testing; no
+  production sensor data is included in the repository.
 - Production login remains unavailable until the API and MongoDB are hosted and
   the GitHub repository variable `CAMS_API_URL` is configured.
 - Password-reset email, MFA, user administration, and authentication audit
@@ -158,6 +166,6 @@ overloading operators: current plant health appears first, machine details are
 one action away, and red is reserved for critical conditions. The same
 information remains usable on desktop, tablet, and mobile layouts.
 
-The next phase should confirm the architecture, real machine inventory,
-engineering units, alarm thresholds, user permissions, and data contract before
-replacing mock data with APIs.
+The next phase should connect alarm workflows and exports, then confirm the real
+machine inventory, engineering units, thresholds, permissions, device identity,
+and production hosting configuration before commissioning.

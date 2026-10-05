@@ -40,18 +40,18 @@ requirements, setup, testing, current status, limitations, and observations.
 
 ## Status
 
-**In Progress** — E7-branded UI prototype is available for stakeholder review.
-The real authentication API and MongoDB session layer are under development in
-`cams-api/`; MQTT, telemetry, exports, and production deployment remain future
-steps.
+**In Progress** — the E7-branded UI, real authentication API, MongoDB storage,
+MQTT ingestion, protected telemetry APIs, and live dashboard integration are
+implemented locally. Exports and production deployment remain future steps.
 
 ## Implementation roadmap
 
 1. **Real authentication and API foundation — local implementation complete**
 2. **MongoDB operational data models — local implementation complete**
 3. **MQTT ingestion and live telemetry API — local implementation complete**
-4. **Dashboard API integration and alarm workflows — planned**
-5. **PDF/Excel exports, deployment, and production verification — planned**
+4. **Dashboard API integration — local implementation complete**
+5. **Alarm workflows — planned**
+6. **PDF/Excel exports, deployment, and production verification — planned**
 
 Step 1 is intentionally not described as production-complete until a managed
 MongoDB deployment, HTTPS API host, secrets, real owner account, and production
@@ -65,6 +65,6 @@ before merging to `main`. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Confidentiality
 
-This repository contains sanitized mock data only. Do not commit passwords,
-tokens, certificates, personal information, customer data, or confidential
-documents.
+This repository contains application code and a synthetic local telemetry
+simulator only. Do not commit passwords, tokens, certificates, personal
+information, customer data, real plant readings, or confidential documents.
