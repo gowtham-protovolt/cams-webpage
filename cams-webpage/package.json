@@ -1,0 +1,14 @@
+{
+  "name": "cams-webpage",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Review-stage UI for the CAMS compressed air monitoring system",
+  "scripts": {
+    "start": "python3 -m http.server 8080",
+    "test": "node ./scripts/validate.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "UNLICENSED"
+}
