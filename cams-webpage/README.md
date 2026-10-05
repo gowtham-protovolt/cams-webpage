@@ -26,6 +26,7 @@ results, status updates, and helping reviewers understand the UI.
 The review-stage UI and its local real-data path are complete. Authentication,
 MongoDB, MQTT ingestion, protected telemetry APIs, and live dashboard updates
 work in the local integration environment. Production services are not configured.
+Authenticated machine-fleet and telemetry exports are available in XLSX and PDF.
 
 ## Hardware requirements
 
@@ -111,6 +112,7 @@ connections, responsive rules, and core UI modules pass validation.
 11. Review Maintenance, Reports, Settings, and Energy preview screens.
 12. Repeat at tablet and mobile widths, including the mobile sidebar.
 13. Check the browser console for errors.
+14. Open Reports and download telemetry and fleet files in both XLSX and PDF.
 
 ### Recorded test result
 
@@ -137,6 +139,7 @@ connections, responsive rules, and core UI modules pass validation.
 - Authentication API integration: implemented locally
 - MQTT integration: implemented locally
 - Live dashboard and stored trend integration: implemented locally
+- Authenticated XLSX and PDF exports: implemented locally
 - Authentication database integration: implemented locally
 - Production authentication deployment: not started
 
@@ -150,7 +153,7 @@ connections, responsive rules, and core UI modules pass validation.
   events are not implemented yet.
 - Alarm acknowledgement and resolution exist only in browser memory.
 - Refreshing the page resets all UI state.
-- Export buttons demonstrate interactions but do not create files.
+- Alarm exports remain disabled until real alarm persistence is implemented.
 - The displayed plant identity is generic to avoid publishing customer data.
 - The compact top-right powered-by mark identifies E7 without adding a large
   logo panel to the login screen.
