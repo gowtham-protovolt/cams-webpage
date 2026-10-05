@@ -140,6 +140,7 @@ connections, responsive rules, and core UI modules pass validation.
 - MQTT integration: implemented locally
 - Live dashboard and stored trend integration: implemented locally
 - Authenticated XLSX and PDF exports: implemented locally
+- Same-origin production web/API container: implemented locally
 - Authentication database integration: implemented locally
 - Production authentication deployment: not started
 

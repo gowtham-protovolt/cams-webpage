@@ -25,6 +25,7 @@ function sameSite(value) {
 
 export function loadConfig() {
   const production = process.env.NODE_ENV === "production";
+  const serveWeb = boolean("SERVE_WEB", false);
   const mongoUri = process.env.MONGODB_URI?.trim();
   if (!mongoUri) throw new Error("MONGODB_URI is required.");
 
@@ -35,20 +36,30 @@ export function loadConfig() {
   if (!allowedOrigins.length) throw new Error("At least one CORS_ORIGINS value is required.");
 
   const cookieSecure = boolean("COOKIE_SECURE", production);
-  const cookieSameSite = sameSite(process.env.COOKIE_SAME_SITE || (production ? "none" : "lax"));
+  const cookieSameSite = sameSite(process.env.COOKIE_SAME_SITE || (production && !serveWeb ? "none" : "lax"));
   if (cookieSameSite === "none" && !cookieSecure) {
     throw new Error("COOKIE_SECURE must be true when COOKIE_SAME_SITE is none.");
   }
 
   const mqttEnabled = boolean("MQTT_ENABLED", false);
   const mqttUrl = process.env.MQTT_URL?.trim() || "mqtt://127.0.0.1:1884";
+  const mqttUsername = process.env.MQTT_USERNAME?.trim() || undefined;
+  const mqttPassword = process.env.MQTT_PASSWORD || undefined;
   if (mqttEnabled && production && !mqttUrl.startsWith("mqtts://") && !mqttUrl.startsWith("wss://")) {
     throw new Error("Production MQTT_URL must use mqtts:// or wss://.");
+  }
+  if (production) {
+    if (!cookieSecure) throw new Error("COOKIE_SECURE must be true in production.");
+    if (allowedOrigins.some(origin => !origin.startsWith("https://"))) throw new Error("Production CORS_ORIGINS must use HTTPS.");
+    if (/^(mongodb:\/\/)?(127\.0\.0\.1|localhost)(:|\/|$)/i.test(mongoUri)) throw new Error("Production MONGODB_URI must not use localhost.");
+    if (mqttEnabled && (!mqttUsername || !mqttPassword)) throw new Error("Production MQTT requires MQTT_USERNAME and MQTT_PASSWORD.");
   }
 
   return {
     environment: process.env.NODE_ENV || "development",
     production,
+    serveWeb,
+    webRoot: process.env.WEB_ROOT?.trim() || "/app/public",
     port: integer("PORT", 3000),
     mongoUri,
     mongoDb: process.env.MONGODB_DB?.trim() || "cams",
@@ -64,8 +75,8 @@ export function loadConfig() {
     mqtt: {
       enabled: mqttEnabled,
       url: mqttUrl,
-      username: process.env.MQTT_USERNAME?.trim() || undefined,
-      password: process.env.MQTT_PASSWORD || undefined,
+      username: mqttUsername,
+      password: mqttPassword,
       topic: process.env.MQTT_TOPIC?.trim() || "cams/+/+/telemetry",
       clientId: process.env.MQTT_CLIENT_ID?.trim() || "cams-api"
     }

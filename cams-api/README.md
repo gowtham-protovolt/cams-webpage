@@ -60,6 +60,45 @@ Production MQTT must use `mqtts://` or `wss://`, broker authentication, unique
 device identities, restricted topic permissions, and secrets stored outside the
 repository.
 
+## Production container
+
+The production image serves the API and static CAMS webpage from the same HTTPS
+origin. This avoids third-party-cookie restrictions and keeps the `HttpOnly`
+session cookie first-party.
+
+Build from the repository root:
+
+```bash
+docker build -f cams-api/Dockerfile -t cams-webpage:latest .
+```
+
+Required production environment variables:
+
+```text
+NODE_ENV=production
+SERVE_WEB=true
+MONGODB_URI=<managed MongoDB TLS URI>
+MONGODB_DB=cams
+CORS_ORIGINS=https://<public CAMS host>
+COOKIE_SECURE=true
+COOKIE_SAME_SITE=lax
+MQTT_ENABLED=true
+MQTT_URL=mqtts://<secure broker>:8883
+MQTT_USERNAME=<broker username>
+MQTT_PASSWORD=<broker password>
+MQTT_TOPIC=cams/+/+/telemetry
+MQTT_CLIENT_ID=cams-api-production
+```
+
+Run `npm run create-admin` as a one-time service command with the admin values
+stored in the hosting provider's secret manager, then remove
+`CAMS_ADMIN_PASSWORD`. Never place production values in a Docker image, GitHub
+variable visible to forks, repository file, or build log.
+
+The container listens on `PORT`, exposes `/api/health`, and includes a Docker
+health check. Production startup rejects insecure cookies, non-HTTPS origins,
+localhost MongoDB, plaintext MQTT, and missing MQTT credentials.
+
 Never commit `.env`, MongoDB credentials, passwords, session cookies, private
 certificates, or customer information.
 
@@ -88,6 +127,7 @@ longer works.
 - MQTT QoS 1 ingestion and duplicate protection: implemented locally
 - Protected machine/history APIs and live SSE stream: implemented locally
 - Authenticated XLSX and PDF export endpoints: implemented locally
+- Same-origin production container and configuration validation: implemented
 - Production MongoDB and API hosting: not configured
 - Password-reset email and MFA: not implemented
 

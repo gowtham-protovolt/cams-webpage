@@ -1,4 +1,5 @@
 import express from "express";
+import path from "node:path";
 import cors from "cors";
 import cookieParser from "cookie-parser";
 import helmet from "helmet";
@@ -15,7 +16,18 @@ export function createApp(config) {
   app.set("trust proxy", 1);
   app.locals.publicUser = publicUser;
 
-  app.use(helmet());
+  app.use(helmet({
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        scriptSrc: ["'self'"],
+        styleSrc: ["'self'", "https://fonts.googleapis.com"],
+        fontSrc: ["'self'", "https://fonts.gstatic.com"],
+        imgSrc: ["'self'", "data:"],
+        connectSrc: ["'self'", ...config.allowedOrigins]
+      }
+    }
+  }));
   app.use(cors({
     credentials: true,
     exposedHeaders: ["Content-Disposition"],
@@ -41,6 +53,20 @@ export function createApp(config) {
   app.use("/api/auth", authRouter(config));
   app.use("/api", telemetryRouter());
   app.use("/api", exportsRouter());
+
+  if (config.serveWeb) {
+    app.get("/runtime-config.js", (_request, response) => {
+      response.type("application/javascript").set("Cache-Control", "no-store")
+        .send('window.CAMS_CONFIG = { apiBaseUrl: "same-origin" };\n');
+    });
+    app.use(express.static(config.webRoot, { index: "index.html", maxAge: config.production ? "1h" : 0 }));
+    app.use((request, response, next) => {
+      if (request.method === "GET" && !request.path.startsWith("/api/")) {
+        return response.sendFile(path.join(config.webRoot, "index.html"));
+      }
+      next();
+    });
+  }
 
   app.use((_request, response) => response.status(404).json({ error: "Not found." }));
   app.use((error, _request, response, _next) => {

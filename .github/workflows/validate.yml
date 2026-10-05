@@ -66,3 +66,7 @@ jobs:
           COOKIE_SECURE: "false"
           COOKIE_SAME_SITE: lax
         run: npm test
+
+      - name: Build production container
+        working-directory: ${{ github.workspace }}
+        run: docker build -f cams-api/Dockerfile -t cams-webpage:ci .

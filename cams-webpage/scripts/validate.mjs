@@ -19,6 +19,7 @@ const checks = [
   ["stylesheet reference", html.includes('href="./styles.css"')],
   ["application script", html.includes('src="./app.js"')],
   ["runtime API configuration", html.includes('src="./runtime-config.js"') && runtimeConfig.includes("apiBaseUrl")],
+  ["same-origin production API", js.includes('configuredApiBaseUrl === "same-origin"')],
   ["E7 powered-by mark", js.includes('<span class="owner-mark">E7</span>')],
   ["mobile breakpoint", css.includes("@media (max-width: 620px)")],
   ["reduced-motion support", css.includes("prefers-reduced-motion")],

@@ -7,7 +7,7 @@ const config = loadConfig();
 await connectDatabase(config);
 const app = createApp(config);
 const mqttClient = startMqtt(config);
-const server = app.listen(config.port, () => {
+const server = app.listen(config.port, "0.0.0.0", () => {
   console.log(`CAMS API listening on port ${config.port}.`);
 });
 
