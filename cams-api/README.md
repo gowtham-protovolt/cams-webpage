@@ -8,6 +8,8 @@ server-side sessions, login throttling, account lockout, CORS controls, MQTT
 telemetry ingestion, time-series retention, protected telemetry APIs, and an
 authenticated server-sent event stream. Passwords are hashed with Node.js
 `scrypt`; raw passwords and session tokens are never stored in MongoDB.
+It also creates authenticated machine-fleet and telemetry reports as standard
+XLSX workbooks and paginated PDF documents.
 
 ## Responsible team member
 
@@ -85,6 +87,7 @@ longer works.
 - MongoDB machine inventory and time-series telemetry: implemented locally
 - MQTT QoS 1 ingestion and duplicate protection: implemented locally
 - Protected machine/history APIs and live SSE stream: implemented locally
+- Authenticated XLSX and PDF export endpoints: implemented locally
 - Production MongoDB and API hosting: not configured
 - Password-reset email and MFA: not implemented
 
@@ -104,6 +107,8 @@ longer works.
 - Production device certificates, MQTT ACLs, broker hosting, and the final
   hardware payload mapping are not configured.
 - The API must be deployed behind HTTPS and must not expose MongoDB publicly.
+- Exports are limited to 5,000 telemetry readings per request to keep memory and
+  response sizes bounded.
 
 ## Results and observations
 
@@ -116,4 +121,6 @@ automatically. A controlled MQTT publisher delivered readings for all 13
 machines through Mosquitto into MongoDB, protected history APIs, and the live
 SSE stream. Full production verification remains incomplete until the API,
 MongoDB, and broker are deployed with real secrets and device identities in
-approved secure storage.
+approved secure storage. Generated XLSX files passed ZIP/OOXML validation, and
+the landscape PDF table was rendered and visually checked for clipping,
+pagination, spacing, headers, and footers.

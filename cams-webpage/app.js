@@ -25,7 +25,7 @@ const authApi = {
         }
       });
     } catch {
-      throw new Error("Authentication service is unavailable. Try again shortly.");
+      throw new Error("CAMS service is unavailable. Try again shortly.");
     }
     if (response.status === 204) return null;
     const payload = await response.json().catch(() => ({}));
@@ -46,6 +46,21 @@ const authApi = {
   },
   async signOut() {
     await this.request("/api/auth/logout", { method: "POST", body: "{}" });
+  },
+  async download(path) {
+    let response;
+    try {
+      response = await fetch(`${API_BASE_URL}${path}`, { credentials: "include" });
+    } catch {
+      throw new Error("CAMS export service is unavailable. Try again shortly.");
+    }
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      throw new Error(payload.error || "Export could not be created.");
+    }
+    const disposition = response.headers.get("content-disposition") || "";
+    const filename = disposition.match(/filename="([^"]+)"/i)?.[1] || "cams-export";
+    return { blob: await response.blob(), filename };
   }
 };
 
@@ -114,6 +129,8 @@ const state = {
   trendMachine: "CAMS-01",
   trendParameter: "Pressure",
   trendRange: "1h",
+  reportMachine: "CAMS-01",
+  reportRange: "24h",
   mobileOpen: false,
   notificationsOpen: false,
   userMenuOpen: false,
@@ -252,6 +269,7 @@ async function loadMachines({ render = true } = {}) {
   if (newest) state.lastTelemetryAt = newest;
   if (!machines.some(machine => machine.id === state.machineId) && machines[0]) state.machineId = machines[0].id;
   if (!machines.some(machine => machine.id === state.trendMachine) && machines[0]) state.trendMachine = machines[0].id;
+  if (!machines.some(machine => machine.id === state.reportMachine) && machines[0]) state.reportMachine = machines[0].id;
   if (render) renderApp();
 }
 
@@ -340,6 +358,40 @@ async function enterApplication(user) {
   }
   renderApp();
   connectTelemetryStream();
+}
+
+async function downloadExport(path) {
+  const { blob, filename } = await authApi.download(path);
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  showToast(`${filename} downloaded.`);
+}
+
+function telemetryExportPath(machineId, range, format) {
+  const machine = machines.find(item => item.id === machineId);
+  const from = new Date(Date.now() - historyRangeMilliseconds(range)).toISOString();
+  const params = new URLSearchParams({ machineId, siteId: machine?.siteId || "demo", from });
+  return `/api/exports/telemetry/${format}?${params}`;
+}
+
+function bindDownload(buttonId, path) {
+  document.querySelector(buttonId)?.addEventListener("click", async event => {
+    const button = event.currentTarget;
+    button.disabled = true;
+    try {
+      await downloadExport(path());
+    } catch (error) {
+      showToast(error.message);
+    } finally {
+      button.disabled = false;
+    }
+  });
 }
 
 function renderLogin() {
@@ -483,7 +535,7 @@ function pageContent() {
     case "trends": return trendsPage();
     case "alarms": return alarmsPage();
     case "maintenance": return phasePage("Maintenance", "P1 · Next phase", "Plan service before it becomes downtime.", "Maintenance workflows will connect compressor runtime, service intervals and technician records in one clear view.", [["calendar", "Service planner", "Upcoming and overdue schedules"], ["maintenance", "Work orders", "Assign, track and close maintenance tasks"], ["report", "Service history", "A complete audit trail for each machine"]]);
-    case "reports": return phasePage("Reports", "P1 · Next phase", "Operational insight, ready to share.", "Create owner-ready plant summaries with uptime, alarms, parameter history and machine performance.", [["report", "Shift reports", "Daily operating summary by machine"], ["trend", "Performance reports", "Min, max and average parameter values"], ["download", "PDF & Excel export", "Review-friendly exports for stakeholders"]]);
+    case "reports": return reportsPage();
     case "energy": return phasePage("Energy & Utilization", "P2 · Future module", "Measure the cost of every cubic metre.", "Energy metering and utilization intelligence will be introduced after the core monitoring workflow is approved.", [["energy", "Energy intensity", "kWh per unit of compressed air"], ["pulse", "Load profile", "Loaded, unloaded and idle time"], ["trend", "Opportunity tracking", "Identify efficiency and leakage improvements"]]);
     case "settings": return settingsPage();
     default: return dashboardPage();
@@ -604,7 +656,7 @@ function machineDetailPage() {
   const related = alarms.filter(alarm => alarm.machine === machine.id).slice(0, 3);
   const pressureHistory = historyFor(machine.id, "Pressure");
   return `<button class="back-link" data-page="machines">${icon("arrowLeft")} Back to machines</button>
-    ${pageHead(`<span class="machine-head-title">${machine.id} ${statusPill(machine.status === "Offline" ? "Offline" : "Online")}</span>`, `${machine.name} · ${machine.zone}`, `<button class="secondary-btn" id="export-machine">${icon("download")} Export data</button>`)}
+    ${pageHead(`<span class="machine-head-title">${machine.id} ${statusPill(machine.status === "Offline" ? "Offline" : "Online")}</span>`, `${machine.name} · ${machine.zone}`, `<button class="secondary-btn" id="export-machine-pdf">${icon("report")} PDF</button><button class="secondary-btn" id="export-machine-xlsx">${icon("download")} Excel</button>`)}
     <div class="meta-line"><span>${icon("gauge")} Mode: ${machine.status}</span><span>${icon("clock")} Last update: ${machine.updated}</span><span>${icon("wifi")} Communication: ${machine.status === "Offline" ? "Interrupted" : "Stable · 98%"}</span></div>
     <div style="height:18px"></div>
     <section class="sensor-card-grid">
@@ -640,7 +692,7 @@ function trendsPage() {
   const selects = machines.map(m => `<option value="${m.id}" ${m.id === state.trendMachine ? "selected" : ""}>${m.id} · ${m.name}</option>`).join("");
   const parameters = ["Pressure", "Flow", "Suction", "Temperature"].map(parameter => `<option value="${parameter}" ${parameter === state.trendParameter ? "selected" : ""}>${parameter}</option>`).join("");
   const ranges = ["15m", "1h", "6h", "24h", "7d", "Custom"].map(range => `<button class="${state.trendRange === range ? "active" : ""}" data-range="${range}">${range}</button>`).join("");
-  return `${pageHead("Trends & analytics", "Explore live and historical operating parameters", `<button class="secondary-btn" id="export-trend">${icon("download")} Export chart</button>`)}
+  return `${pageHead("Trends & analytics", "Explore live and historical operating parameters", `<button class="secondary-btn" id="export-trend-pdf">${icon("report")} PDF</button><button class="secondary-btn" id="export-trend-xlsx">${icon("download")} Excel</button>`)}
     <section class="trend-controls"><div class="control-group grow"><label>Machine</label><div class="select-wrap"><select id="trend-machine">${selects}</select>${icon("chevronDown")}</div></div><div class="control-group"><label>Parameter</label><div class="select-wrap"><select id="trend-parameter">${parameters}</select>${icon("chevronDown")}</div></div><div class="control-group grow"><label>Time range</label><div class="range-pills">${ranges}</div></div></section>
     <article class="panel"><header class="panel-head"><div class="panel-title"><h2>${state.trendParameter} history</h2><p>${machine.id} · ${state.trendRange === "Custom" ? "custom range preview" : `last ${state.trendRange}`}</p></div><span class="updated-note"><i class="pulse-dot"></i>Live sampling</span></header>
       <div class="panel-body"><div class="chart tall">${chartSvg(state.trendParameter, history)}</div></div>
@@ -669,6 +721,17 @@ function alarmSummary(label, count, iconName, tone) {
 function phasePage(title, tag, headline, description, features) {
   return `${pageHead(title, "Preview of the planned CAMS capability")}
     <section class="placeholder-layout"><article class="panel phase-card"><span class="phase-tag">${tag}</span><h2>${headline}</h2><p>${description}</p></article><article class="panel"><header class="panel-head"><div class="panel-title"><h2>Planned capabilities</h2><p>For owner discussion and scope review</p></div></header><div class="feature-list">${features.map(([iconName, name, copy]) => `<div class="feature-item">${icon(iconName)}<div><strong>${name}</strong><span>${copy}</span></div></div>`).join("")}</div></article></section>`;
+}
+
+function reportsPage() {
+  const options = machines.map(machine => `<option value="${machine.id}" ${machine.id === state.reportMachine ? "selected" : ""}>${machine.id} · ${machine.name}</option>`).join("");
+  const ranges = ["1h", "6h", "24h", "7d"].map(range => `<button class="${state.reportRange === range ? "active" : ""}" data-report-range="${range}">${range}</button>`).join("");
+  return `${pageHead("Reports & exports", "Create protected files from stored CAMS data")}
+    <section class="trend-controls"><div class="control-group grow"><label>Machine</label><div class="select-wrap"><select id="report-machine">${options}</select>${icon("chevronDown")}</div></div><div class="control-group grow"><label>Telemetry range</label><div class="range-pills">${ranges}</div></div></section>
+    <section class="placeholder-layout">
+      <article class="panel phase-card"><span class="phase-tag">LIVE EXPORT</span><h2>Machine telemetry</h2><p>Download up to 5,000 stored readings for ${state.reportMachine} over the selected period.</p><div class="page-actions"><button class="primary-btn" id="report-telemetry-xlsx">${icon("download")} Download Excel</button><button class="secondary-btn" id="report-telemetry-pdf">${icon("report")} Download PDF</button></div></article>
+      <article class="panel phase-card"><span class="phase-tag">LIVE EXPORT</span><h2>Machine fleet</h2><p>Download the registered machine inventory with each compressor's latest telemetry.</p><div class="page-actions"><button class="primary-btn" id="report-fleet-xlsx">${icon("download")} Download Excel</button><button class="secondary-btn" id="report-fleet-pdf">${icon("report")} Download PDF</button></div></article>
+    </section>`;
 }
 
 function settingsPage() {
@@ -751,9 +814,26 @@ function bindPageEvents() {
     renderApp();
     loadMachineHistory(state.trendMachine, state.trendRange).catch(error => showToast(error.message));
   }));
+  document.querySelector("#report-machine")?.addEventListener("change", event => {
+    state.reportMachine = event.target.value;
+    renderApp();
+  });
+  document.querySelectorAll("[data-report-range]").forEach(button => button.addEventListener("click", () => {
+    state.reportRange = button.dataset.reportRange;
+    renderApp();
+  }));
   document.querySelectorAll(".toggle").forEach(button => button.addEventListener("click", () => button.classList.toggle("on")));
   document.querySelector("#save-settings")?.addEventListener("click", () => showToast("Interface preferences saved for review."));
-  ["#export-machines", "#export-machine", "#export-trend", "#export-alarms"].forEach(selector => document.querySelector(selector)?.addEventListener("click", () => showToast("Export prepared in this UI prototype.")));
+  bindDownload("#export-machines", () => "/api/exports/machines/xlsx");
+  bindDownload("#export-machine-xlsx", () => telemetryExportPath(state.machineId, "1h", "xlsx"));
+  bindDownload("#export-machine-pdf", () => telemetryExportPath(state.machineId, "1h", "pdf"));
+  bindDownload("#export-trend-xlsx", () => telemetryExportPath(state.trendMachine, state.trendRange, "xlsx"));
+  bindDownload("#export-trend-pdf", () => telemetryExportPath(state.trendMachine, state.trendRange, "pdf"));
+  bindDownload("#report-telemetry-xlsx", () => telemetryExportPath(state.reportMachine, state.reportRange, "xlsx"));
+  bindDownload("#report-telemetry-pdf", () => telemetryExportPath(state.reportMachine, state.reportRange, "pdf"));
+  bindDownload("#report-fleet-xlsx", () => "/api/exports/machines/xlsx");
+  bindDownload("#report-fleet-pdf", () => "/api/exports/machines/pdf");
+  document.querySelector("#export-alarms")?.addEventListener("click", () => showToast("Alarm exports will be enabled when real alarm storage is connected."));
 }
 
 function updateAlarm(id, nextStatus) {

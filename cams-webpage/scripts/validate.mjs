@@ -25,6 +25,8 @@ const checks = [
   ["machine API connection", js.includes('authApi.request("/api/machines")')],
   ["MQTT telemetry event stream", js.includes('/api/telemetry/stream') && js.includes('addEventListener("telemetry"')],
   ["no static machine telemetry", !js.includes('const machines = [') && js.includes("let machines = []")],
+  ["authenticated Excel export", js.includes('/api/exports/telemetry/${format}') && js.includes('credentials: "include"')],
+  ["PDF and Excel report controls", js.includes('report-telemetry-pdf') && js.includes('report-telemetry-xlsx')],
   ["dashboard page", js.includes("function dashboardPage()")],
   ["machine details page", js.includes("function machineDetailPage()")],
   ["trends page", js.includes("function trendsPage()")],

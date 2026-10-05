@@ -7,6 +7,7 @@ import { authenticate } from "./middleware/auth.js";
 import { publicUser } from "./auth/session.js";
 import { telemetryRouter } from "./routes/telemetry.js";
 import { getMqttStatus } from "./telemetry/mqtt.js";
+import { exportsRouter } from "./routes/exports.js";
 
 export function createApp(config) {
   const app = express();
@@ -17,6 +18,7 @@ export function createApp(config) {
   app.use(helmet());
   app.use(cors({
     credentials: true,
+    exposedHeaders: ["Content-Disposition"],
     origin(origin, callback) {
       if (!origin || config.allowedOrigins.includes(origin.replace(/\/$/, ""))) return callback(null, true);
       callback(new Error("Origin is not allowed."));
@@ -38,6 +40,7 @@ export function createApp(config) {
   });
   app.use("/api/auth", authRouter(config));
   app.use("/api", telemetryRouter());
+  app.use("/api", exportsRouter());
 
   app.use((_request, response) => response.status(404).json({ error: "Not found." }));
   app.use((error, _request, response, _next) => {

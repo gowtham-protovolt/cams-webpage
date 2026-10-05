@@ -42,7 +42,8 @@ requirements, setup, testing, current status, limitations, and observations.
 
 **In Progress** — the E7-branded UI, real authentication API, MongoDB storage,
 MQTT ingestion, protected telemetry APIs, and live dashboard integration are
-implemented locally. Exports and production deployment remain future steps.
+implemented locally. Authenticated PDF/XLSX exports are also implemented;
+production deployment remains the final infrastructure step.
 
 ## Implementation roadmap
 
@@ -51,7 +52,8 @@ implemented locally. Exports and production deployment remain future steps.
 3. **MQTT ingestion and live telemetry API — local implementation complete**
 4. **Dashboard API integration — local implementation complete**
 5. **Alarm workflows — planned**
-6. **PDF/Excel exports, deployment, and production verification — planned**
+6. **PDF/Excel exports — local implementation complete**
+7. **Deployment and production verification — requires production services**
 
 Step 1 is intentionally not described as production-complete until a managed
 MongoDB deployment, HTTPS API host, secrets, real owner account, and production
