@@ -142,6 +142,7 @@ connections, responsive rules, and core UI modules pass validation.
 - Authenticated XLSX and PDF exports: implemented locally
 - Same-origin production web/API container: implemented locally
 - Authentication database integration: implemented locally
+- Owner-only user list, account creation, and access controls: implemented locally
 - Production authentication deployment: not started
 
 ## Known issues and limitations
@@ -150,8 +151,8 @@ connections, responsive rules, and core UI modules pass validation.
   production sensor data is included in the repository.
 - Production login remains unavailable until the API and MongoDB are hosted and
   the GitHub repository variable `CAMS_API_URL` is configured.
-- Password-reset email, MFA, user administration, and authentication audit
-  events are not implemented yet.
+- Password-reset email, MFA, role editing, account deletion, and authentication
+  audit events are not implemented yet.
 - Alarm acknowledgement and resolution exist only in browser memory.
 - Refreshing the page resets all UI state.
 - Alarm exports remain disabled until real alarm persistence is implemented.

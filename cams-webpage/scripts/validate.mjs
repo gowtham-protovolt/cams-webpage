@@ -36,6 +36,8 @@ const checks = [
   ["no embedded demo password", !js.includes('value="cams')],
   ["password is not persisted", !js.includes("password: password") && !js.includes("password: password.value")],
   ["server session restore", js.includes('authApi.restore()') && js.includes('authApi.signOut()')],
+  ["owner-only user management", js.includes('/api/admin/users') && js.includes('ownerOnly: true') && js.includes('function usersPage()')],
+  ["user passwords are never rendered", !js.includes("passwordHash")],
   ["sanitized public identity", !js.includes("Gowtham") && !js.includes("Dharanidhara")]
 ];
 

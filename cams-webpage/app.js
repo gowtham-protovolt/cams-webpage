@@ -8,6 +8,7 @@ function sessionUser(user) {
   return {
     ...user,
     identity: user.email || user.username,
+    isOwner: user.role === "owner",
     role: user.role === "owner" ? "Owner / Admin" : user.role
   };
 }
@@ -47,6 +48,18 @@ const authApi = {
   },
   async signOut() {
     await this.request("/api/auth/logout", { method: "POST", body: "{}" });
+  },
+  async listUsers() {
+    return this.request("/api/admin/users");
+  },
+  async createUser(user) {
+    return this.request("/api/admin/users", { method: "POST", body: JSON.stringify(user) });
+  },
+  async setUserStatus(userId, active) {
+    return this.request(`/api/admin/users/${encodeURIComponent(userId)}/status`, {
+      method: "PATCH",
+      body: JSON.stringify({ active })
+    });
   },
   async download(path) {
     let response;
@@ -136,7 +149,10 @@ const state = {
   notificationsOpen: false,
   userMenuOpen: false,
   telemetryConnected: false,
-  lastTelemetryAt: null
+  lastTelemetryAt: null,
+  managedUsers: [],
+  usersLoading: false,
+  usersError: ""
 };
 
 const navItems = [
@@ -146,6 +162,7 @@ const navItems = [
   { id: "alarms", label: "Alarms & Events", icon: "alarm", group: "Monitor" },
   { id: "maintenance", label: "Maintenance", icon: "maintenance", group: "Manage" },
   { id: "reports", label: "Reports", icon: "report", group: "Manage" },
+  { id: "users", label: "Users", icon: "user", group: "Manage", ownerOnly: true },
   { id: "settings", label: "Settings", icon: "settings", group: "Manage" },
   { id: "energy", label: "Energy & Utilization", icon: "energy", group: "Future", future: true }
 ];
@@ -503,7 +520,7 @@ function renderApp() {
   const groups = ["Monitor", "Manage", "Future"];
   const connectionLabel = state.telemetryConnected ? "Live telemetry stream" : "Telemetry reconnecting";
   const networkLabel = state.telemetryConnected ? "Plant network online" : "Waiting for live telemetry";
-  const sidebarNav = groups.map(group => `<div class="nav-group-label">${group}</div><nav class="nav-list">${navItems.filter(item => item.group === group).map(item => `<button class="nav-item ${state.page === item.id || (state.page === "machine-detail" && item.id === "machines") ? "active" : ""}" data-page="${item.id}">${icon(item.icon)}<span>${item.label}</span>${item.future ? '<span class="future">P2</span>' : ""}</button>`).join("")}</nav>`).join("");
+  const sidebarNav = groups.map(group => `<div class="nav-group-label">${group}</div><nav class="nav-list">${navItems.filter(item => item.group === group && (!item.ownerOnly || user.isOwner)).map(item => `<button class="nav-item ${state.page === item.id || (state.page === "machine-detail" && item.id === "machines") ? "active" : ""}" data-page="${item.id}">${icon(item.icon)}<span>${item.label}</span>${item.future ? '<span class="future">P2</span>' : ""}</button>`).join("")}</nav>`).join("");
   app.innerHTML = `<div class="app-shell">
     ${state.mobileOpen ? '<button class="mobile-overlay" id="mobile-overlay" aria-label="Close menu"></button>' : ""}
     <aside class="sidebar ${state.mobileOpen ? "open" : ""}">
@@ -537,6 +554,7 @@ function pageContent() {
     case "alarms": return alarmsPage();
     case "maintenance": return phasePage("Maintenance", "P1 · Next phase", "Plan service before it becomes downtime.", "Maintenance workflows will connect compressor runtime, service intervals and technician records in one clear view.", [["calendar", "Service planner", "Upcoming and overdue schedules"], ["maintenance", "Work orders", "Assign, track and close maintenance tasks"], ["report", "Service history", "A complete audit trail for each machine"]]);
     case "reports": return reportsPage();
+    case "users": return usersPage();
     case "energy": return phasePage("Energy & Utilization", "P2 · Future module", "Measure the cost of every cubic metre.", "Energy metering and utilization intelligence will be introduced after the core monitoring workflow is approved.", [["energy", "Energy intensity", "kWh per unit of compressed air"], ["pulse", "Load profile", "Loaded, unloaded and idle time"], ["trend", "Opportunity tracking", "Identify efficiency and leakage improvements"]]);
     case "settings": return settingsPage();
     default: return dashboardPage();
@@ -746,6 +764,67 @@ function settingsPage() {
     <section class="settings-grid">${cards.map(([title, copy, value, toggle]) => `<article class="setting-card"><h3>${title}</h3><p>${copy}</p><div class="toggle-row"><strong>${value}</strong>${toggle ? '<button class="toggle on" aria-label="Toggle setting"></button>' : '<button class="secondary-btn">Edit</button>'}</div></article>`).join("")}</section>`;
 }
 
+function userDate(value) {
+  if (!value) return "Never";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "—" : date.toLocaleString("en-IN", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+function usersPage() {
+  if (!state.currentUser?.isOwner) {
+    return `${pageHead("Users", "Owner access is required")}<div class="empty-state">${icon("shield")}You do not have permission to manage CAMS users.</div>`;
+  }
+  const activeUsers = state.managedUsers.filter(user => user.active).length;
+  const rows = state.managedUsers.map(user => `<tr>
+    <td><div class="user-identity"><span class="avatar">${escapeHtml(initials(user.displayName))}</span><span><strong>${escapeHtml(user.displayName)}</strong><small>@${escapeHtml(user.username)}</small></span></div></td>
+    <td>${escapeHtml(user.email)}</td>
+    <td><span class="role-tag">${escapeHtml(user.role)}</span></td>
+    <td>${statusPill(user.active ? "Online" : "Offline")}</td>
+    <td>${escapeHtml(userDate(user.lastLoginAt))}</td>
+    <td><button class="mini-action" data-user-status="${escapeHtml(user.id)}" data-next-active="${user.active ? "false" : "true"}" ${user.id === state.currentUser.id ? "disabled" : ""}>${user.active ? "Disable" : "Enable"}</button></td>
+  </tr>`).join("");
+  const tableBody = state.usersLoading
+    ? `<tr><td colspan="6"><div class="empty-state"><span class="loading-spinner dark"></span>Loading registered users…</div></td></tr>`
+    : rows || `<tr><td colspan="6"><div class="empty-state">${icon("user")}No user accounts are registered.</div></td></tr>`;
+  return `${pageHead("Users", "Create accounts and control access to CAMS")}
+    <section class="user-summary-grid">
+      ${kpi("Registered users", state.managedUsers.length, "All accounts", "user", "teal")}
+      ${kpi("Active accounts", activeUsers, "Allowed to sign in", "shield", "green")}
+    </section>
+    ${state.usersError ? `<div class="inline-error">${escapeHtml(state.usersError)}</div>` : ""}
+    <section class="panel user-create-panel">
+      <header class="panel-head"><div class="panel-title"><h2>Add a CAMS user</h2><p>The temporary password is hashed immediately and is never shown in the user list.</p></div></header>
+      <form id="create-user-form" class="user-create-form">
+        <label><span>Display name</span><input name="displayName" required maxlength="80" autocomplete="name" placeholder="e.g. Plant Operator"></label>
+        <label><span>Username</span><input name="username" required minlength="3" maxlength="32" pattern="[a-z0-9._-]+" autocomplete="off" placeholder="plant.operator"></label>
+        <label><span>Email</span><input name="email" required type="email" autocomplete="email" placeholder="operator@example.com"></label>
+        <label><span>Role</span><select name="role"><option value="viewer">Viewer</option><option value="operator">Operator</option></select></label>
+        <label><span>Temporary password</span><input name="password" required type="password" minlength="12" maxlength="128" autocomplete="new-password" placeholder="At least 12 characters"></label>
+        <button class="primary-btn" type="submit">${icon("user")} Create user</button>
+      </form>
+    </section>
+    <section class="panel">
+      <header class="panel-head"><div class="panel-title"><h2>Registered accounts</h2><p>${activeUsers} active · ${state.managedUsers.length - activeUsers} disabled</p></div><button class="secondary-btn" id="refresh-users">${icon("refresh")} Refresh</button></header>
+      <div class="table-wrap"><table class="data-table user-table"><thead><tr><th>User</th><th>Email</th><th>Role</th><th>Status</th><th>Last login</th><th>Action</th></tr></thead><tbody>${tableBody}</tbody></table></div>
+    </section>`;
+}
+
+async function loadManagedUsers({ render = true } = {}) {
+  if (!state.currentUser?.isOwner) return;
+  state.usersLoading = true;
+  state.usersError = "";
+  if (render) renderApp();
+  try {
+    const payload = await authApi.listUsers();
+    state.managedUsers = payload.users || [];
+  } catch (error) {
+    state.usersError = error.message;
+  } finally {
+    state.usersLoading = false;
+    if (render) renderApp();
+  }
+}
+
 function bindGlobalEvents() {
   document.querySelectorAll("[data-page]").forEach(button => button.addEventListener("click", () => navigate(button.dataset.page)));
   document.querySelectorAll("[data-machine]").forEach(button => button.addEventListener("click", event => {
@@ -825,6 +904,36 @@ function bindPageEvents() {
   }));
   document.querySelectorAll(".toggle").forEach(button => button.addEventListener("click", () => button.classList.toggle("on")));
   document.querySelector("#save-settings")?.addEventListener("click", () => showToast("Interface preferences saved for review."));
+  document.querySelector("#refresh-users")?.addEventListener("click", () => loadManagedUsers());
+  document.querySelector("#create-user-form")?.addEventListener("submit", async event => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const button = form.querySelector('button[type="submit"]');
+    const formData = new FormData(form);
+    button.disabled = true;
+    try {
+      await authApi.createUser(Object.fromEntries(formData));
+      form.reset();
+      await loadManagedUsers({ render: false });
+      renderApp();
+      showToast("CAMS user created successfully.");
+    } catch (error) {
+      state.usersError = error.message;
+      renderApp();
+    }
+  });
+  document.querySelectorAll("[data-user-status]").forEach(button => button.addEventListener("click", async () => {
+    button.disabled = true;
+    try {
+      await authApi.setUserStatus(button.dataset.userStatus, button.dataset.nextActive === "true");
+      await loadManagedUsers({ render: false });
+      renderApp();
+      showToast("User access updated.");
+    } catch (error) {
+      state.usersError = error.message;
+      renderApp();
+    }
+  }));
   bindDownload("#export-machines", () => "/api/exports/machines/xlsx");
   bindDownload("#export-machine-xlsx", () => telemetryExportPath(state.machineId, "1h", "xlsx"));
   bindDownload("#export-machine-pdf", () => telemetryExportPath(state.machineId, "1h", "pdf"));
@@ -844,12 +953,14 @@ function updateAlarm(id, nextStatus) {
 }
 
 function navigate(page) {
+  if (page === "users" && !state.currentUser?.isOwner) return;
   state.page = page;
   state.mobileOpen = false;
   renderApp();
   if (page === "trends" && state.trendMachine) {
     loadMachineHistory(state.trendMachine, state.trendRange).catch(error => showToast(error.message));
   }
+  if (page === "users") loadManagedUsers().catch(error => showToast(error.message));
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 

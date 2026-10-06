@@ -9,6 +9,7 @@ import { publicUser } from "./auth/session.js";
 import { telemetryRouter } from "./routes/telemetry.js";
 import { getMqttStatus } from "./telemetry/mqtt.js";
 import { exportsRouter } from "./routes/exports.js";
+import { usersRouter } from "./routes/users.js";
 
 export function createApp(config) {
   const app = express();
@@ -51,6 +52,7 @@ export function createApp(config) {
     response.json({ status: "ok", service: "cams-api", mqtt: getMqttStatus(), timestamp: new Date().toISOString() });
   });
   app.use("/api/auth", authRouter(config));
+  app.use("/api/admin", usersRouter());
   app.use("/api", telemetryRouter());
   app.use("/api", exportsRouter());
 

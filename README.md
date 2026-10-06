@@ -46,6 +46,8 @@ implemented locally. Authenticated PDF/XLSX exports are also implemented;
 production deployment remains the final infrastructure step.
 The repository now includes a same-origin production container so the API and
 webpage can be deployed together without third-party session cookies.
+Owner-only user administration is implemented for listing accounts, creating
+operator/viewer users, and enabling or disabling access.
 
 ## Implementation roadmap
 
@@ -56,7 +58,8 @@ webpage can be deployed together without third-party session cookies.
 5. **Alarm workflows — planned**
 6. **PDF/Excel exports — local implementation complete**
 7. **Deployment container and security validation — local implementation complete**
-8. **Managed-service provisioning and production verification — external setup required**
+8. **Owner user administration — local implementation complete**
+9. **Managed-service provisioning and production verification — external setup required**
 
 Step 1 is intentionally not described as production-complete until a managed
 MongoDB deployment, HTTPS API host, secrets, real owner account, and production

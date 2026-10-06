@@ -128,6 +128,7 @@ longer works.
 - Protected machine/history APIs and live SSE stream: implemented locally
 - Authenticated XLSX and PDF export endpoints: implemented locally
 - Same-origin production container and configuration validation: implemented
+- Owner-only account listing, creation, and enable/disable controls: implemented
 - Production MongoDB and API hosting: not configured
 - Password-reset email and MFA: not implemented
 
@@ -140,8 +141,8 @@ longer works.
 - For reliable production cookies, host the frontend and API under the same
   registered domain or serve the frontend from the API host. Unrelated-domain
   third-party cookies can be blocked by browsers.
-- Password-reset email, MFA, user administration, and security audit events are
-  not included yet.
+- Password-reset email, MFA, role editing, account deletion, and security audit
+  events are not included yet.
 - The bundled Mosquitto configuration allows anonymous access and is strictly
   for a loopback-bound local development broker; never deploy it publicly.
 - Production device certificates, MQTT ACLs, broker hosting, and the final
@@ -159,7 +160,9 @@ the server record. The official MongoDB driver uses a reusable connection pool,
 and session records have a TTL index so expired sessions are removed
 automatically. A controlled MQTT publisher delivered readings for all 13
 machines through Mosquitto into MongoDB, protected history APIs, and the live
-SSE stream. Full production verification remains incomplete until the API,
+SSE stream. Owner-only API tests also verify account listing and creation,
+password hashing, denial for non-owners, self-disable protection, and immediate
+session revocation for disabled accounts. Full production verification remains incomplete until the API,
 MongoDB, and broker are deployed with real secrets and device identities in
 approved secure storage. Generated XLSX files passed ZIP/OOXML validation, and
 the landscape PDF table was rendered and visually checked for clipping,
