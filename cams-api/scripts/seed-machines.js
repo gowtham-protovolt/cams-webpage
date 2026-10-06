@@ -22,7 +22,7 @@ const db = await connectDatabase(config);
 const now = new Date();
 await db.collection("machines").bulkWrite(inventory.map(([machineId, name, zone]) => ({
   updateOne: {
-    filter: { siteId: "demo", machineId },
+    filter: { siteId: "plant-01", machineId },
     update: {
       $set: { name, zone, active: true, updatedAt: now },
       $setOnInsert: { status: "offline", createdAt: now }

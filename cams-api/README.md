@@ -56,9 +56,11 @@ Publish one controlled local telemetry cycle:
 SIMULATOR_ONCE=true npm run simulate-telemetry
 ```
 
-Production MQTT must use `mqtts://` or `wss://`, broker authentication, unique
-device identities, restricted topic permissions, and secrets stored outside the
-repository.
+The local broker requires separate backend and device credentials. Its ACL lets
+the device publish only `cams/plant-01/CAMS-01/telemetry` and the matching status
+topic. Port 1884 is available to the protected LAN for ESP32 commissioning.
+Production MQTT must use `mqtts://` or `wss://`, unique device identities, and
+secrets stored outside the repository.
 
 ## Production container
 
@@ -125,6 +127,8 @@ longer works.
 - Frontend API integration: implemented and browser-tested locally
 - MongoDB machine inventory and time-series telemetry: implemented locally
 - MQTT QoS 1 ingestion and duplicate protection: implemented locally
+- Authenticated Mosquitto device/backend identities and topic ACL: implemented locally
+- PV1/PV2/PV3, ERR1/ERR2/ERR3, calibration, and quality storage: implemented locally
 - Protected machine/history APIs and live SSE stream: implemented locally
 - Authenticated XLSX and PDF export endpoints: implemented locally
 - Same-origin production container and configuration validation: implemented
@@ -143,10 +147,11 @@ longer works.
   third-party cookies can be blocked by browsers.
 - Password-reset email, MFA, role editing, account deletion, and security audit
   events are not included yet.
-- The bundled Mosquitto configuration allows anonymous access and is strictly
-  for a loopback-bound local development broker; never deploy it publicly.
-- Production device certificates, MQTT ACLs, broker hosting, and the final
-  hardware payload mapping are not configured.
+- The bundled Mosquitto configuration is authenticated but plaintext; use it
+  only on a protected commissioning LAN and never expose port 1884 to the internet.
+- Production TLS certificates and managed broker hosting are not configured.
+- The PLC slave ID, baud/parity, ESP32 pins, Modbus offset convention, and DINT
+  word order must be confirmed on a supervised bench before plant use.
 - The API must be deployed behind HTTPS and must not expose MongoDB publicly.
 - Exports are limited to 5,000 telemetry readings per request to keep memory and
   response sizes bounded.
@@ -158,9 +163,9 @@ Pages. Invalid credentials were rejected, a valid MongoDB user created an
 `HttpOnly` session, the session survived a browser reload, and logout revoked
 the server record. The official MongoDB driver uses a reusable connection pool,
 and session records have a TTL index so expired sessions are removed
-automatically. A controlled MQTT publisher delivered readings for all 13
-machines through Mosquitto into MongoDB, protected history APIs, and the live
-SSE stream. Owner-only API tests also verify account listing and creation,
+automatically. A controlled device publisher delivered CAMS-01 readings at
+501–503 ms intervals through authenticated Mosquitto into MongoDB, protected
+history APIs, and the live SSE stream. Owner-only API tests also verify account listing and creation,
 password hashing, denial for non-owners, self-disable protection, and immediate
 session revocation for disabled accounts. Full production verification remains incomplete until the API,
 MongoDB, and broker are deployed with real secrets and device identities in

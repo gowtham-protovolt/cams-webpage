@@ -35,7 +35,7 @@ No hardware is required to review this UI prototype.
 The intended future monitoring system may include:
 
 - Industrial air compressors
-- Flow, pressure, suction, and temperature sensors
+- Flow, pressure, and suction sensors
 - PLC with a verified register map
 - RS485/Modbus communication where applicable
 - ESP32-S3 edge gateway if approved by the final architecture
@@ -102,10 +102,10 @@ connections, responsive rules, and core UI modules pass validation.
 3. Sign in with a real account stored in MongoDB.
 4. Reload the page and verify the server session is restored.
 5. Open the account menu and verify Sign out revokes the server session.
-6. Start the telemetry simulator and verify the dashboard shows the machines
-   registered in MongoDB and four KPI cards.
+6. Start the telemetry simulator and verify CAMS-01 updates at 500 ms intervals.
 7. Open Machines and test search and every status filter.
-8. Open a machine and verify its sensors, trend, health, service, and alarms.
+8. Open CAMS-01 and verify flow, pressure, suction, raw PV1/PV2/PV3, ERR1/ERR2/ERR3,
+   conversion quality, and calibration version.
 9. Change machine, parameter, and time range on Trends and verify the chart and
    statistics use stored telemetry readings.
 10. Filter alarms and test View, Acknowledge, and Resolve.
@@ -118,14 +118,15 @@ connections, responsive rules, and core UI modules pass validation.
 
 - **Configuration:** Local CAMS API, MongoDB 7.0.43, Mosquitto 2.0.22, MQTT
   simulator, static UI, current Chromium browser
-- **Date:** 2026-10-05
+- **Date:** 2026-10-06
 - **Responsible:** CAMS Project Team
 - **Expected result:** Invalid credentials fail; a valid MongoDB account signs
   in; MQTT data appears in the machine list and charts; the session survives
   reload and is revoked on logout
-- **Observed result:** All 20 UI checks and all 9 API tests passed. A browser
-  session restored after reload, loaded 13 MongoDB machines, received a live
-  MQTT cycle through SSE, and displayed stored pressure statistics.
+- **Observed result:** The authenticated browser loaded 13 MongoDB machines and
+  displayed CAMS-01 flow, pressure, suction, raw PLC values, error registers,
+  calibration version, and quality. Five bounded samples were stored with
+  501–503 ms intervals.
 
 ## Current status
 
@@ -138,6 +139,7 @@ connections, responsive rules, and core UI modules pass validation.
 - Automated structural checks: implemented
 - Authentication API integration: implemented locally
 - MQTT integration: implemented locally
+- Three calibrated sensor fields and PLC diagnostics: implemented locally
 - Live dashboard and stored trend integration: implemented locally
 - Authenticated XLSX and PDF exports: implemented locally
 - Same-origin production web/API container: implemented locally

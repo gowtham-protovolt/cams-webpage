@@ -36,7 +36,7 @@ export function telemetryRouter() {
   router.get("/machines/:machineId/telemetry", async (request, response, next) => {
     try {
       const machineId = request.params.machineId;
-      const siteId = String(request.query.siteId || "demo");
+      const siteId = String(request.query.siteId || "plant-01");
       if (!MACHINE_ID.test(machineId) || !MACHINE_ID.test(siteId)) return response.status(400).json({ error: "Invalid machine identifier." });
       const limit = Math.min(Math.max(Number.parseInt(request.query.limit || "300", 10) || 300, 1), 2000);
       const from = request.query.from ? new Date(String(request.query.from)) : new Date(Date.now() - 60 * 60 * 1000);

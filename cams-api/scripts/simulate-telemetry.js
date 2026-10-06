@@ -1,10 +1,12 @@
+import "dotenv/config";
 import mqtt from "mqtt";
 
 const brokerUrl = process.env.MQTT_URL?.trim() || "mqtt://127.0.0.1:1884";
 const once = process.env.SIMULATOR_ONCE === "true";
+const cycleLimit = Number.parseInt(process.env.SIMULATOR_CYCLES || "0", 10);
 const client = await mqtt.connectAsync(brokerUrl, {
-  username: process.env.MQTT_USERNAME?.trim() || undefined,
-  password: process.env.MQTT_PASSWORD || undefined,
+  username: process.env.MQTT_DEVICE_USERNAME?.trim() || undefined,
+  password: process.env.MQTT_DEVICE_PASSWORD || undefined,
   clientId: `cams-simulator-${process.pid}`,
   clean: true,
   protocolVersion: 4
@@ -15,7 +17,7 @@ const offline = new Set([4]);
 
 async function publishCycle() {
   const timestamp = new Date();
-  await Promise.all(Array.from({ length: 13 }, async (_value, index) => {
+  await Promise.all(Array.from({ length: 1 }, async (_value, index) => {
     const number = index + 1;
     const machineId = `CAMS-${String(number).padStart(2, "0")}`;
     const isStopped = stopped.has(number);
@@ -29,20 +31,40 @@ async function publishCycle() {
       metrics: {
         pressureBar: isStopped || isOffline ? 0.4 : Number((7.1 + wave).toFixed(2)),
         flowLpm: isStopped || isOffline ? 0 : Number((25 + wave * 4).toFixed(2)),
-        suctionBar: isStopped || isOffline ? -0.1 : Number((-0.8 + wave / 3).toFixed(2)),
-        temperatureC: isOffline ? 30 : Number(((number === 3 ? 45.8 : 39) + wave * 3).toFixed(2))
-      }
+        suctionKpa: isStopped || isOffline ? 0 : Number((1.2 + wave).toFixed(3))
+      },
+      raw: {
+        pv1: isStopped || isOffline ? 2000 : Math.round(2000.09 + (25 + wave * 4) * 3.95805),
+        pv2: isStopped || isOffline ? 6015 : Math.round(6015.44 + (1.2 + wave) * 41.1673),
+        pv3: isStopped || isOffline ? 1999 : Math.round(1999 + (7.1 + wave) * 5569 / 7)
+      },
+      errors: { flow: 0, suction: 0, pressure: 0 },
+      quality: { flow: "good", suction: "good", pressure: number === 3 ? "uncertain" : "good", modbus: "good" },
+      source: "simulator",
+      calibrationVersion: "empirical-2026-10-06-v1"
     };
-    await client.publishAsync(`cams/demo/${machineId}/telemetry`, JSON.stringify(body), { qos: 1 });
+    await client.publishAsync(`cams/plant-01/${machineId}/telemetry`, JSON.stringify(body), { qos: 1 });
   }));
-  console.log(`Published telemetry for 13 machines at ${timestamp.toISOString()}.`);
+  console.log(`Published CAMS-01 telemetry at ${timestamp.toISOString()}.`);
 }
 
 await publishCycle();
-if (once) {
+if (once || cycleLimit === 1) {
   await client.endAsync();
 } else {
-  const timer = setInterval(() => publishCycle().catch(error => console.error(error.message)), 1000);
+  let completedCycles = 1;
+  const timer = setInterval(async () => {
+    try {
+      await publishCycle();
+      completedCycles += 1;
+      if (cycleLimit > 0 && completedCycles >= cycleLimit) {
+        clearInterval(timer);
+        await client.endAsync();
+      }
+    } catch (error) {
+      console.error(error.message);
+    }
+  }, 500);
   const shutdown = async () => {
     clearInterval(timer);
     await client.endAsync();

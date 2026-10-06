@@ -124,11 +124,11 @@ let telemetryStream = null;
 let telemetryRenderTimer = null;
 
 let alarms = [
-  { id: 1, time: "10:42:18", date: "Today", machine: "CAMS-03", parameter: "Temperature", value: "45.8 °C", severity: "Critical", status: "Active", message: "Discharge temperature above high limit" },
+  { id: 1, time: "10:42:18", date: "Today", machine: "CAMS-03", parameter: "Pressure", value: "7.2 bar", severity: "Critical", status: "Active", message: "Pressure is outside the verified calibration band" },
   { id: 2, time: "10:38:04", date: "Today", machine: "CAMS-04", parameter: "Communication", value: "No signal", severity: "Critical", status: "Active", message: "Gateway communication interrupted" },
   { id: 3, time: "09:56:42", date: "Today", machine: "CAMS-11", parameter: "Pressure", value: "6.6 bar", severity: "Warning", status: "Acknowledged", message: "Pressure below preferred operating band" },
   { id: 4, time: "08:21:15", date: "Today", machine: "CAMS-07", parameter: "State", value: "Stopped", severity: "Info", status: "Acknowledged", message: "Machine stopped by local operator" },
-  { id: 5, time: "17:48:02", date: "Yesterday", machine: "CAMS-06", parameter: "Temperature", value: "43.1 °C", severity: "Warning", status: "Resolved", message: "Temperature returned to normal band" },
+  { id: 5, time: "17:48:02", date: "Yesterday", machine: "CAMS-06", parameter: "Suction", value: "1.9 kPa", severity: "Warning", status: "Resolved", message: "Suction returned to the verified range" },
   { id: 6, time: "15:12:38", date: "Yesterday", machine: "CAMS-09", parameter: "Flow", value: "20.2 L/min", severity: "Warning", status: "Resolved", message: "Flow dropped below configured threshold" }
 ];
 
@@ -225,8 +225,7 @@ function healthScore(status, metrics) {
   let score = 100;
   if (metrics.pressureBar < 6.8 || metrics.pressureBar > 7.5) score -= 12;
   if (metrics.flowLpm < 22 || metrics.flowLpm > 28) score -= 8;
-  if (metrics.suctionBar < -1 || metrics.suctionBar > -0.5) score -= 8;
-  if (metrics.temperatureC > 43) score -= 18;
+  if (metrics.suctionKpa < 0.6 || metrics.suctionKpa > 1.8) score -= 8;
   return Math.max(0, score);
 }
 
@@ -237,14 +236,18 @@ function mapMachine(item) {
   const receivedAt = telemetry?.receivedAt || item.lastSeenAt || null;
   return {
     id: item.id,
-    siteId: item.siteId || "demo",
+    siteId: item.siteId || "plant-01",
     name: item.name || item.id,
     zone: item.zone || "Unassigned",
     status,
     pressure: metrics?.pressureBar ?? null,
-    temp: metrics?.temperatureC ?? null,
     flow: metrics?.flowLpm ?? null,
-    suction: metrics?.suctionBar ?? null,
+    suction: metrics?.suctionKpa ?? null,
+    raw: telemetry?.raw || null,
+    errors: telemetry?.errors || null,
+    quality: telemetry?.quality || null,
+    calibrationVersion: telemetry?.calibrationVersion || null,
+    source: telemetry?.source || null,
     health: healthScore(status, metrics),
     updated: relativeTime(receivedAt),
     receivedAt,
@@ -254,13 +257,18 @@ function mapMachine(item) {
 
 function normalizeReading(payload) {
   return {
-    siteId: payload.siteId || payload.series?.siteId || "demo",
+    siteId: payload.siteId || payload.series?.siteId || "plant-01",
     machineId: payload.machineId || payload.series?.machineId,
     observedAt: payload.observedAt,
     receivedAt: payload.receivedAt,
     sequence: payload.sequence,
     status: payload.status,
-    metrics: payload.metrics
+    metrics: payload.metrics,
+    raw: payload.raw || null,
+    errors: payload.errors || null,
+    quality: payload.quality || null,
+    calibrationVersion: payload.calibrationVersion || null,
+    source: payload.source || null
   };
 }
 
@@ -394,7 +402,7 @@ async function downloadExport(path) {
 function telemetryExportPath(machineId, range, format) {
   const machine = machines.find(item => item.id === machineId);
   const from = new Date(Date.now() - historyRangeMilliseconds(range)).toISOString();
-  const params = new URLSearchParams({ machineId, siteId: machine?.siteId || "demo", from });
+  const params = new URLSearchParams({ machineId, siteId: machine?.siteId || "plant-01", from });
   return `/api/exports/telemetry/${format}?${params}`;
 }
 
@@ -445,7 +453,7 @@ function renderLogin() {
       <div class="powered-by"><span>Powered by</span><span class="owner-mark">E7</span></div>
       <div class="visual-copy">
         <h2>Clarity for every compressor.</h2>
-        <p>One operational view of pressure, flow, suction and temperature across your complete compressed air network.</p>
+        <p>One operational view of pressure, flow and suction across your complete compressed air network.</p>
       </div>
       <div class="system-route"><span>Sensors</span><i class="route-dot"></i><span>PLC</span><i class="route-dot"></i><span>ESP32-S3</span><i class="route-dot"></i><span>MQTT</span><i class="route-dot"></i><b>CAMS</b></div>
     </aside>
@@ -568,8 +576,7 @@ function pageHead(title, subtitle, actions = "") {
 const parameterConfig = {
   Pressure: { field: "pressureBar", unit: "bar", fallbackSpan: 1.2 },
   Flow: { field: "flowLpm", unit: "L/min", fallbackSpan: 10 },
-  Suction: { field: "suctionBar", unit: "bar", fallbackSpan: 0.8 },
-  Temperature: { field: "temperatureC", unit: "°C", fallbackSpan: 12 }
+  Suction: { field: "suctionKpa", unit: "kPa", fallbackSpan: 1.2 }
 };
 
 function historyFor(machineId, parameter) {
@@ -630,7 +637,7 @@ function dashboardPage() {
       <article class="panel">
         <header class="panel-head"><div class="panel-title"><h2>Live operating snapshot</h2><p>${snapshot ? `${snapshot.id} · ${snapshot.name}` : "No connected machine"}</p></div>${snapshot ? `<button class="panel-link" data-machine="${snapshot.id}">View machine →</button>` : ""}</header>
         <div class="panel-body">
-          <div class="sensor-row">${sensorMini("Flow", snapshot ? fmt(snapshot.flow) : "—", "L/min")}${sensorMini("Pressure", snapshot ? fmt(snapshot.pressure) : "—", "bar")}${sensorMini("Suction", snapshot ? fmt(snapshot.suction) : "—", "bar")}${sensorMini("Temperature", snapshot ? fmt(snapshot.temp) : "—", "°C")}</div>
+          <div class="sensor-row">${sensorMini("Flow", snapshot ? fmt(snapshot.flow) : "—", "L/min")}${sensorMini("Pressure", snapshot ? fmt(snapshot.pressure) : "—", "bar")}${sensorMini("Suction", snapshot ? fmt(snapshot.suction) : "—", "kPa")}</div>
           <div class="chart-toolbar"><div class="chart-legend"><i class="legend-line"></i>Pressure · ${snapshot?.id || "—"}</div><div class="segment-control"><button>15m</button><button class="active">1h</button><button>6h</button><button>24h</button></div></div>
           <div class="chart">${chartSvg("Pressure", snapshotHistory)}</div>
         </div>
@@ -659,13 +666,13 @@ function machinesPage() {
   const filters = ["All", "Running", "Stopped", "Alarm", "Offline"].map(filter => `<button class="filter-pill ${state.machineFilter === filter ? "active" : ""}" data-filter="${filter}">${filter}${filter === "All" ? ` · ${machines.length}` : ""}</button>`).join("");
   const rows = filtered.map((machine, index) => `<tr class="clickable" data-machine="${machine.id}">
     <td><div class="machine-cell"><span class="machine-num">${String(machines.indexOf(machine) + 1).padStart(2, "0")}</span><span><strong>${machine.id}</strong><small>${machine.zone}</small></span></div></td>
-    <td>${statusPill(machine.status)}</td><td>${fmt(machine.pressure, "bar")}</td><td>${fmt(machine.temp, "°C")}</td><td>${machine.updated}</td>
+    <td>${statusPill(machine.status)}</td><td>${fmt(machine.pressure, "bar")}</td><td>${fmt(machine.flow, "L/min")}</td><td>${fmt(machine.suction, "kPa")}</td><td>${machine.updated}</td>
     <td><div class="health-score"><div class="health-bar"><span style="width:${machine.health}%"></span></div><small>${machine.health ? `${machine.health}%` : "—"}</small></div></td>
     <td><button class="row-action" data-machine="${machine.id}">View details</button></td>
   </tr>`).join("");
   return `${pageHead("Machines", `Monitor and compare ${machines.length} connected compressor systems`, `<button class="secondary-btn" id="export-machines">${icon("download")} Export list</button>`)}
     <div class="filter-bar"><div class="search-wrap">${icon("search")}<input id="machine-search" type="search" value="${state.machineSearch}" placeholder="Search ID, name or area…"></div><div class="filter-pills">${filters}</div></div>
-    <section class="panel"><div class="table-wrap"><table class="data-table"><thead><tr><th>Machine</th><th>Status</th><th>Pressure</th><th>Temperature</th><th>Last update</th><th>Health</th><th>Action</th></tr></thead><tbody>${rows || `<tr><td colspan="7"><div class="empty-state">${icon("search")}No machines match this filter.</div></td></tr>`}</tbody></table></div></section>`;
+    <section class="panel"><div class="table-wrap"><table class="data-table"><thead><tr><th>Machine</th><th>Status</th><th>Pressure</th><th>Flow</th><th>Suction</th><th>Last update</th><th>Health</th><th>Action</th></tr></thead><tbody>${rows || `<tr><td colspan="8"><div class="empty-state">${icon("search")}No machines match this filter.</div></td></tr>`}</tbody></table></div></section>`;
 }
 
 function machineDetailPage() {
@@ -681,8 +688,10 @@ function machineDetailPage() {
     <section class="sensor-card-grid">
       ${sensorCard("Flow", value("flow", "L/min"), "Normal range 22–28 L/min")}
       ${sensorCard("Pressure", value("pressure", "bar"), "Target range 6.8–7.5 bar")}
-      ${sensorCard("Suction", value("suction", "bar"), "Normal range −1.0–−0.5 bar")}
-      ${sensorCard("Temperature", value("temp", "°C"), "Warning above 43 °C")}
+      ${sensorCard("Suction", value("suction", "kPa"), "Verified calibration range 0.6–1.8 kPa")}
+    </section>
+    <section class="panel diagnostics-panel"><header class="panel-head"><div class="panel-title"><h2>PLC diagnostics</h2><p>Raw Modbus registers and conversion traceability</p></div><span class="updated-note">${machine.source || "Waiting for gateway"}</span></header>
+      <div class="diagnostic-grid">${diagnosticValue("PV1 · Flow", machine.raw?.pv1, `ERR1 ${machine.errors?.flow ?? "—"}`, machine.quality?.flow)}${diagnosticValue("PV2 · Suction", machine.raw?.pv2, `ERR2 ${machine.errors?.suction ?? "—"}`, machine.quality?.suction)}${diagnosticValue("PV3 · Pressure", machine.raw?.pv3, `ERR3 ${machine.errors?.pressure ?? "—"}`, machine.quality?.pressure)}${diagnosticValue("Calibration", machine.calibrationVersion || "—", "500 ms sampling", machine.quality?.modbus)}</div>
     </section>
     <section class="detail-grid">
       <article class="panel"><header class="panel-head"><div class="panel-title"><h2>Operating trend</h2><p>Pressure · last 60 minutes</p></div><div class="segment-control"><button>15m</button><button class="active">1h</button><button>6h</button><button>24h</button></div></header><div class="panel-body"><div class="chart tall">${chartSvg("Pressure", pressureHistory)}</div></div></article>
@@ -698,6 +707,11 @@ function sensorCard(label, value, range) {
   return `<article class="sensor-card"><div class="sensor-card-top"><span class="sensor-card-label">${label}</span><span class="live-tag"><i class="live-dot"></i> LIVE</span></div><div class="sensor-card-value">${value}</div><div class="sensor-range">${range}</div></article>`;
 }
 
+function diagnosticValue(label, value, detail, quality) {
+  const normalized = quality || "unknown";
+  return `<div class="diagnostic-value"><span>${label}</span><strong>${value ?? "—"}</strong><small>${detail} · <b class="quality-${normalized}">${normalized}</b></small></div>`;
+}
+
 function trendsPage() {
   const machine = machines.find(item => item.id === state.trendMachine) || machines[0];
   if (!machine) return `${pageHead("Trends & analytics", "No machine telemetry is available")}<div class="empty-state">${icon("trend")}Publish telemetry to begin charting.</div>`;
@@ -709,7 +723,7 @@ function trendsPage() {
   const average = values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
   const unit = (parameterConfig[state.trendParameter] || parameterConfig.Pressure).unit;
   const selects = machines.map(m => `<option value="${m.id}" ${m.id === state.trendMachine ? "selected" : ""}>${m.id} · ${m.name}</option>`).join("");
-  const parameters = ["Pressure", "Flow", "Suction", "Temperature"].map(parameter => `<option value="${parameter}" ${parameter === state.trendParameter ? "selected" : ""}>${parameter}</option>`).join("");
+  const parameters = ["Pressure", "Flow", "Suction"].map(parameter => `<option value="${parameter}" ${parameter === state.trendParameter ? "selected" : ""}>${parameter}</option>`).join("");
   const ranges = ["15m", "1h", "6h", "24h", "7d", "Custom"].map(range => `<button class="${state.trendRange === range ? "active" : ""}" data-range="${range}">${range}</button>`).join("");
   return `${pageHead("Trends & analytics", "Explore live and historical operating parameters", `<button class="secondary-btn" id="export-trend-pdf">${icon("report")} PDF</button><button class="secondary-btn" id="export-trend-xlsx">${icon("download")} Excel</button>`)}
     <section class="trend-controls"><div class="control-group grow"><label>Machine</label><div class="select-wrap"><select id="trend-machine">${selects}</select>${icon("chevronDown")}</div></div><div class="control-group"><label>Parameter</label><div class="select-wrap"><select id="trend-parameter">${parameters}</select>${icon("chevronDown")}</div></div><div class="control-group grow"><label>Time range</label><div class="range-pills">${ranges}</div></div></section>

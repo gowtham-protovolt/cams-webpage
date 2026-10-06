@@ -301,7 +301,7 @@ svg { display: block; }
 .panel-title p { margin: 4px 0 0; color: var(--muted); font-size: .68rem; }
 .panel-link { padding: 7px 4px; border: 0; color: var(--brand-700); background: transparent; font-size: .72rem; font-weight: 700; }
 .panel-body { padding: 18px 19px; }
-.sensor-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+.sensor-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
 .sensor-mini { padding: 13px; border: 1px solid #e5ecec; border-radius: 12px; background: #fbfcfc; }
 .sensor-mini-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; color: var(--muted); font-size: .63rem; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
 .sensor-mini-head .live-dot { width: 5px; height: 5px; }
@@ -391,7 +391,16 @@ svg { display: block; }
 .meta-line { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 8px; color: var(--muted); font-size: .72rem; }
 .meta-line span { display: inline-flex; align-items: center; gap: 6px; }
 .meta-line svg { width: 14px; height: 14px; }
-.sensor-card-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 18px; }
+.sensor-card-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-bottom: 18px; }
+.diagnostics-panel { margin-bottom: 18px; }
+.diagnostic-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; padding: 18px; }
+.diagnostic-value { border: 1px solid var(--border); border-radius: 12px; padding: 14px; display: grid; gap: 7px; background: var(--surface-2); }
+.diagnostic-value span, .diagnostic-value small { color: var(--muted); }
+.diagnostic-value strong { font-size: 20px; overflow-wrap: anywhere; }
+.quality-good { color: var(--green); }
+.quality-uncertain { color: var(--amber); }
+.quality-bad { color: var(--red); }
+.quality-unknown { color: var(--muted); }
 .sensor-card { position: relative; overflow: hidden; padding: 18px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: white; }
 .sensor-card::after { position: absolute; right: -20px; bottom: -28px; width: 88px; height: 88px; border-radius: 50%; background: #edf7f5; content: ""; }
 .sensor-card-top { position: relative; z-index: 1; display: flex; align-items: center; justify-content: space-between; }
@@ -489,7 +498,7 @@ svg { display: block; }
   :root { --sidebar: 224px; }
   .kpi-grid { grid-template-columns: repeat(2, 1fr); }
   .dashboard-grid, .detail-grid { grid-template-columns: 1fr; }
-  .sensor-card-grid { grid-template-columns: repeat(2, 1fr); }
+  .sensor-card-grid, .diagnostic-grid { grid-template-columns: repeat(2, 1fr); }
   .placeholder-layout { grid-template-columns: 1fr; }
   .user-create-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
@@ -525,7 +534,7 @@ svg { display: block; }
   .kpi-grid { grid-template-columns: 1fr 1fr; gap: 10px; }
   .kpi-card { min-height: 112px; padding: 15px; }
   .kpi-value strong { font-size: 1.55rem; }
-  .sensor-row, .sensor-card-grid { grid-template-columns: repeat(2, 1fr); }
+  .sensor-row, .sensor-card-grid, .diagnostic-grid { grid-template-columns: repeat(2, 1fr); }
   .filter-bar { align-items: stretch; flex-direction: column; }
   .search-wrap { max-width: none; }
   .chart-toolbar { align-items: flex-start; flex-direction: column; }
@@ -541,7 +550,7 @@ svg { display: block; }
 }
 
 @media (max-width: 390px) {
-  .kpi-grid, .sensor-row, .sensor-card-grid, .alarm-summary { grid-template-columns: 1fr; }
+  .kpi-grid, .sensor-row, .sensor-card-grid, .diagnostic-grid, .alarm-summary { grid-template-columns: 1fr; }
   .panel-head { align-items: flex-start; }
   .notification-btn { display: none; }
 }

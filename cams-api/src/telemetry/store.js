@@ -25,7 +25,12 @@ export async function ingestTelemetry(telemetry, retentionDays) {
       receivedAt: telemetry.receivedAt,
       sequence: telemetry.sequence,
       status: telemetry.status,
-      metrics: telemetry.metrics
+      metrics: telemetry.metrics,
+      raw: telemetry.raw || null,
+      errors: telemetry.errors || null,
+      quality: telemetry.quality || null,
+      calibrationVersion: telemetry.calibrationVersion || null,
+      source: telemetry.source
     };
     await Promise.all([
       db.collection("latestTelemetry").updateOne(
