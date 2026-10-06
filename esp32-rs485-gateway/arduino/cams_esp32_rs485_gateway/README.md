@@ -22,7 +22,6 @@ project.
 5. Select the exact ESP32-S3 board and its USB port, compile, and upload.
 6. Open Serial Monitor at 115200 baud.
 
-The sketch reads PV1/PV2/PV3 and ERR1/ERR2/ERR3 every 500 ms, uses NTP for an
+The sketch reads PV1/PV2/PV3 and ERR1/ERR2/ERR3 every 1 second, uses NTP for an
 ISO UTC timestamp, converts the three sensor values, and publishes to
 `cams/plant-01/CAMS-01/telemetry` with MQTT QoS 1.
-

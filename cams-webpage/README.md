@@ -106,7 +106,7 @@ connections, responsive rules, and core UI modules pass validation.
 3. Sign in with a real account stored in MongoDB.
 4. Reload the page and verify the server session is restored.
 5. Open the account menu and verify Sign out revokes the server session.
-6. Connect the ESP32 gateway and verify CAMS-01 updates at 500 ms intervals.
+6. Connect the ESP32 gateway and verify CAMS-01 updates at 1-second intervals.
 7. Open Machines and test search and every status filter.
 8. Open CAMS-01 and verify flow, pressure, suction, raw PV1/PV2/PV3, ERR1/ERR2/ERR3,
    conversion quality, and calibration version.

@@ -1,7 +1,7 @@
 services:
   mongodb:
     image: mongo:7.0.43
-    container_name: cams-api-mongodb
+    container_name: CAMS-MongoDB
     restart: unless-stopped
     ports:
       - "127.0.0.1:27018:27017"
@@ -15,7 +15,7 @@ services:
 
   mqtt-config:
     image: eclipse-mosquitto:2.0.22
-    container_name: cams-api-mqtt-config
+    container_name: CAMS-MQTT-Config
     restart: "no"
     environment:
       MQTT_BACKEND_USERNAME: ${MQTT_USERNAME:?Set MQTT_USERNAME in cams-api/.env}
@@ -37,7 +37,7 @@ services:
 
   mqtt:
     image: eclipse-mosquitto:2.0.22
-    container_name: cams-api-mqtt
+    container_name: CAMS-Mosquitto
     restart: unless-stopped
     entrypoint: ["/usr/sbin/mosquitto", "-c", "/mosquitto/config/mosquitto.conf"]
     depends_on:
@@ -54,7 +54,7 @@ services:
     build:
       context: ..
       dockerfile: cams-api/Dockerfile
-    container_name: cams-api-web
+    container_name: CAMS
     restart: unless-stopped
     depends_on:
       mongodb:

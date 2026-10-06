@@ -23,7 +23,7 @@ constexpr uint16_t ERROR_REGISTER_COUNT = 3;
 enum class DintWordOrder { HighWordFirst, LowWordFirst };
 constexpr DintWordOrder PLC_DINT_WORD_ORDER = DintWordOrder::HighWordFirst;
 
-constexpr uint32_t SAMPLE_INTERVAL_MS = 500;
+constexpr uint32_t SAMPLE_INTERVAL_MS = 1000;
 constexpr uint32_t WIFI_RETRY_MS = 5000;
 constexpr uint32_t MQTT_RETRY_MS = 3000;
 
@@ -33,4 +33,3 @@ constexpr char MQTT_CLIENT_ID[] = "cams-esp32-001";
 constexpr char TELEMETRY_TOPIC[] = "cams/plant-01/CAMS-01/telemetry";
 constexpr char STATUS_TOPIC[] = "cams/plant-01/CAMS-01/status";
 constexpr char CALIBRATION_VERSION[] = "empirical-2026-10-06-v1";
-

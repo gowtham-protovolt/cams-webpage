@@ -2,7 +2,7 @@
 
 ## Project name and objective
 
-This project reads three PLC DINT process values over Modbus RTU every 500 ms,
+This project reads three PLC DINT process values over Modbus RTU every 1 second,
 applies the measured flow, suction, and pressure calibrations, and publishes raw
 and engineering values to the CAMS MQTT ingestion service with QoS 1.
 
@@ -54,7 +54,7 @@ codes, converted metrics, calibration version, and per-sensor quality.
 2. Confirm PV1/PV2/PV3 in PLC software and compare them with the serial output.
 3. If the DINT values are incorrect, verify offset convention and word order.
 4. Compare all conversions against the supplied calibration points.
-5. Confirm one MQTT message every 500 ms and zero rejected backend messages.
+5. Confirm one MQTT message every 1 second and zero rejected backend messages.
 6. Confirm raw values, converted values, timestamps, and error codes in MongoDB.
 7. Compare the live webpage values with the PLC display under supervised operation.
 
@@ -62,7 +62,7 @@ codes, converted metrics, calibration version, and per-sensor quality.
 
 **Testing**
 
-- Firmware structure and 500 ms scheduler: implemented
+- Firmware structure and 1-second scheduler: implemented
 - Three-value contiguous Modbus read: implemented with unverified configuration
 - Empirical calibration equations: implemented
 - MQTT QoS 1 payload: implemented

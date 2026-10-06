@@ -56,9 +56,9 @@ To run the complete local stack in Docker:
 docker compose up -d --build
 ```
 
-Open <http://localhost:3100>. Docker should show `cams-api-web`,
-`cams-api-mongodb`, and `cams-api-mqtt`. The one-time
-`cams-api-mqtt-config` container exits successfully after creating credentials.
+Open <http://localhost:3100>. Docker should show `CAMS`, `CAMS-MongoDB`, and
+`CAMS-Mosquitto`. The one-time `CAMS-MQTT-Config` container exits successfully
+after creating credentials.
 
 The local broker requires separate backend and device credentials. Its ACL lets
 the device publish only `cams/plant-01/CAMS-01/telemetry` and the matching status
