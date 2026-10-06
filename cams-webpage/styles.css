@@ -401,6 +401,21 @@ svg { display: block; }
 .quality-uncertain { color: var(--amber); }
 .quality-bad { color: var(--red); }
 .quality-unknown { color: var(--muted); }
+.data-tree-panel { overflow: hidden; }
+.data-tree-root { padding: 20px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+.data-tree-root-label, .data-tree-node > summary { display: flex; align-items: center; gap: 10px; min-height: 44px; }
+.data-tree-root-label svg, .data-tree-node > summary svg { width: 18px; height: 18px; color: var(--teal); flex: 0 0 auto; }
+.data-tree-root-label span, .data-tree-node > summary span { margin-left: auto; color: var(--muted); font-family: "DM Sans", sans-serif; font-size: 12px; }
+.data-tree-children { margin-left: 20px; padding-left: 22px; border-left: 1px solid var(--border-strong); }
+.data-tree-node > summary { cursor: pointer; list-style: none; border-radius: 9px; padding: 4px 9px; }
+.data-tree-node > summary::-webkit-details-marker { display: none; }
+.data-tree-node > summary::before { content: "›"; color: var(--muted); transform: rotate(0); transition: transform .15s ease; }
+.data-tree-node[open] > summary::before { transform: rotate(90deg); }
+.data-tree-node > summary:hover { background: var(--surface-2); }
+.data-tree-values { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; padding: 8px 0 14px; }
+.data-tree-value { display: flex; justify-content: space-between; gap: 14px; border: 1px solid var(--border); background: var(--surface-2); border-radius: 8px; padding: 9px 11px; font-family: "DM Sans", sans-serif; }
+.data-tree-value span { color: var(--muted); }
+.data-tree-value strong { color: var(--ink); text-align: right; overflow-wrap: anywhere; }
 .sensor-card { position: relative; overflow: hidden; padding: 18px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: white; }
 .sensor-card::after { position: absolute; right: -20px; bottom: -28px; width: 88px; height: 88px; border-radius: 50%; background: #edf7f5; content: ""; }
 .sensor-card-top { position: relative; z-index: 1; display: flex; align-items: center; justify-content: space-between; }
@@ -547,6 +562,9 @@ svg { display: block; }
   .placeholder-layout { gap: 14px; }
   .phase-card { min-height: 280px; padding: 24px; }
   .user-summary-grid { grid-template-columns: 1fr 1fr; }
+  .data-tree-values { grid-template-columns: 1fr; }
+  .data-tree-root { padding: 12px; }
+  .data-tree-children { margin-left: 7px; padding-left: 12px; }
 }
 
 @media (max-width: 390px) {

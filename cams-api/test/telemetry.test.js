@@ -31,6 +31,7 @@ test("rejects malformed topics and out-of-range values", () => {
     timestamp: now.toISOString(),
     sequence: 124,
     status: "running",
+    source: "esp32-s3-rs485",
     metrics: { pressureBar: 100, flowLpm: 25, suctionKpa: 1.2 }
   }));
   assert.throws(() => parseTelemetryMessage("cams/demo/CAMS-01/telemetry", invalid, now), /pressureBar/);
@@ -41,6 +42,7 @@ test("rejects stale device timestamps", () => {
     timestamp: "2026-10-01T12:00:00.000Z",
     sequence: 125,
     status: "running",
+    source: "esp32-s3-rs485",
     metrics: { pressureBar: 7, flowLpm: 25, suctionKpa: 1.2 }
   }));
   assert.throws(() => parseTelemetryMessage("cams/demo/CAMS-01/telemetry", stale, now), /24 hours/);
@@ -52,5 +54,14 @@ test("rejects incomplete PLC diagnostics", () => {
   assert.throws(
     () => parseTelemetryMessage("cams/demo/CAMS-01/telemetry", Buffer.from(JSON.stringify(invalid)), now),
     /errors.pressure/
+  );
+});
+
+test("rejects non-ESP32 telemetry sources", () => {
+  const invalid = JSON.parse(validPayload.toString("utf8"));
+  invalid.source = "simulator";
+  assert.throws(
+    () => parseTelemetryMessage("cams/demo/CAMS-01/telemetry", Buffer.from(JSON.stringify(invalid)), now),
+    /source must be esp32-s3-rs485/
   );
 });

@@ -56,6 +56,9 @@ The ESP32-S3 gateway firmware now reads PLC PV1/PV2/PV3 over Modbus RTU every
 500 ms, applies the measured calibrations, and publishes raw and converted
 values through a device-restricted MQTT topic. Hardware wiring and PLC serial
 settings still require supervised commissioning.
+The obsolete simulator/dashboard Docker project and its simulated-data volumes
+were removed. The maintained Docker stack now contains the CAMS webpage/API,
+MongoDB, and authenticated Mosquitto broker only.
 
 ## Implementation roadmap
 

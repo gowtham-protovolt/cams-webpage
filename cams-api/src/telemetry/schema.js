@@ -70,8 +70,8 @@ export function parseTelemetryMessage(topic, payload, receivedAt = new Date()) {
   if (calibrationVersion !== undefined && (!calibrationVersion || calibrationVersion.length > 80)) {
     throw new Error("calibrationVersion must contain 1–80 characters.");
   }
-  const source = body.source === undefined ? "mqtt" : String(body.source).trim();
-  if (!source || source.length > 40) throw new Error("source must contain 1–40 characters.");
+  const source = String(body.source || "").trim();
+  if (source !== "esp32-s3-rs485") throw new Error("source must be esp32-s3-rs485.");
 
   return {
     series: { siteId, machineId },

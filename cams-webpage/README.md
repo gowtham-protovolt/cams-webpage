@@ -4,13 +4,15 @@
 
 **CAMS Webpage** is a responsive industrial monitoring interface for reviewing
 the current condition of a compressed-air network. The prototype presents a
-login experience, a plant dashboard, 13 compressor records, machine details,
+login experience, a plant dashboard, the CAMS-01 compressor, machine details,
 parameter trends, alarms, and preview screens for later modules.
 
 The objective is to deliver the monitoring interface in controlled stages. The
 current branch connects login, machine inventory, current readings, and
 historical trend charts to the CAMS API. Live MQTT readings reach the browser
 through an authenticated server-sent event stream.
+The Live Data page presents stored samples as
+`CAMS → CAMS-01 → date → time → values` without reading Docker logs.
 
 ## Responsible team member
 
@@ -106,13 +108,15 @@ connections, responsive rules, and core UI modules pass validation.
 7. Open Machines and test search and every status filter.
 8. Open CAMS-01 and verify flow, pressure, suction, raw PV1/PV2/PV3, ERR1/ERR2/ERR3,
    conversion quality, and calibration version.
-9. Change machine, parameter, and time range on Trends and verify the chart and
+9. Open Live Data and verify the newest timestamp expands to converted values,
+   raw PLC values, error registers, source, and calibration.
+10. Change machine, parameter, and time range on Trends and verify the chart and
    statistics use stored telemetry readings.
-10. Filter alarms and test View, Acknowledge, and Resolve.
-11. Review Maintenance, Reports, Settings, and Energy preview screens.
-12. Repeat at tablet and mobile widths, including the mobile sidebar.
-13. Check the browser console for errors.
-14. Open Reports and download telemetry and fleet files in both XLSX and PDF.
+11. Filter alarms and test View, Acknowledge, and Resolve.
+12. Review Maintenance, Reports, Settings, and Energy preview screens.
+13. Repeat at tablet and mobile widths, including the mobile sidebar.
+14. Check the browser console for errors.
+15. Open Reports and download telemetry and fleet files in both XLSX and PDF.
 
 ### Recorded test result
 

@@ -50,6 +50,40 @@ services:
       - cams-mqtt-secrets:/mosquitto/secrets:ro
       - cams-mqtt-data:/mosquitto/data
 
+  app:
+    build:
+      context: ..
+      dockerfile: cams-api/Dockerfile
+    container_name: cams-api-web
+    restart: unless-stopped
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      mqtt:
+        condition: service_started
+    ports:
+      - "3100:3000"
+    environment:
+      NODE_ENV: development
+      PORT: 3000
+      SERVE_WEB: "true"
+      WEB_ROOT: /app/public
+      MONGODB_URI: mongodb://mongodb:27017
+      MONGODB_DB: cams_local
+      CORS_ORIGINS: http://localhost:3100,http://127.0.0.1:3100
+      COOKIE_NAME: cams_session
+      COOKIE_SECURE: "false"
+      COOKIE_SAME_SITE: lax
+      SESSION_HOURS: 8
+      REMEMBER_SESSION_DAYS: 7
+      TELEMETRY_RETENTION_DAYS: 7
+      MQTT_ENABLED: "true"
+      MQTT_URL: mqtt://mqtt:1883
+      MQTT_USERNAME: ${MQTT_USERNAME:?Set MQTT_USERNAME in cams-api/.env}
+      MQTT_PASSWORD: ${MQTT_PASSWORD:?Set MQTT_PASSWORD in cams-api/.env}
+      MQTT_TOPIC: cams/+/+/telemetry
+      MQTT_CLIENT_ID: cams-api-docker
+
 volumes:
   cams-mongodb-data:
   cams-mqtt-secrets:

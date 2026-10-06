@@ -50,11 +50,26 @@ Start the API with:
 npm run dev
 ```
 
+To run the complete local stack in Docker:
+
+```bash
+docker compose up -d --build
+```
+
+Open <http://localhost:3100>. Docker should show `cams-api-web`,
+`cams-api-mongodb`, and `cams-api-mqtt`. The one-time
+`cams-api-mqtt-config` container exits successfully after creating credentials.
+
 The local broker requires separate backend and device credentials. Its ACL lets
 the device publish only `cams/plant-01/CAMS-01/telemetry` and the matching status
 topic. Port 1884 is available to the protected LAN for ESP32 commissioning.
 Production MQTT must use `mqtts://` or `wss://`, unique device identities, and
 secrets stored outside the repository.
+
+Mosquitto is a transient publish/subscribe broker, not a stored-data browser.
+The protected CAMS **Live Data** page provides the requested hierarchy from
+MongoDB as `CAMS → CAMS-01 → date → time → values`. Only payloads declaring
+`source: esp32-s3-rs485` are accepted.
 
 ## Production container
 

@@ -150,6 +150,7 @@ const state = {
 
 const navItems = [
   { id: "dashboard", label: "Dashboard", icon: "dashboard", group: "Monitor" },
+  { id: "live-data", label: "Live Data", icon: "database", group: "Monitor" },
   { id: "machines", label: "Machines", icon: "machine", group: "Monitor" },
   { id: "trends", label: "Trends", icon: "trend", group: "Monitor" },
   { id: "alarms", label: "Alarms & Events", icon: "alarm", group: "Monitor" },
@@ -533,7 +534,7 @@ function renderApp() {
       <div class="header-plant"><button class="icon-btn mobile-menu" id="mobile-menu" aria-label="Open menu">${icon("menu")}</button><div><div class="plant-name">Demo Spinning Plant</div><div class="plant-meta"><i class="live-dot"></i><span>${networkLabel}</span></div></div></div>
       <div class="header-right">
         <div class="clock"><strong id="header-time">--:--:--</strong><span id="header-date">--</span></div>
-        <button class="icon-btn notification-btn" id="notification-button" aria-label="Notifications">${icon("bell")}<span class="notification-badge">2</span></button>
+        <button class="icon-btn notification-btn" id="notification-button" aria-label="Notifications">${icon("bell")}${alarms.filter(alarm => alarm.status === "Active").length ? `<span class="notification-badge">${alarms.filter(alarm => alarm.status === "Active").length}</span>` : ""}</button>
         <div class="account-control">
           <button class="user-menu" id="user-menu" aria-haspopup="menu" aria-expanded="${state.userMenuOpen}"><span class="avatar">${escapeHtml(initials(user.displayName))}</span><span class="user-copy"><strong>${safeName}</strong><span>${safeRole}</span></span>${icon("chevronDown")}</button>
           ${state.userMenuOpen ? `<div class="account-menu" role="menu"><div class="account-summary"><span class="avatar">${escapeHtml(initials(user.displayName))}</span><div><strong>${safeName}</strong><span>${escapeHtml(user.identity)}</span></div></div><div class="account-session">${icon("shield")}<span>Secure server session active</span></div><button id="sign-out" class="account-action" role="menuitem">${icon("logout")}<span>Sign out</span></button></div>` : ""}
@@ -549,6 +550,7 @@ function renderApp() {
 
 function pageContent() {
   switch (state.page) {
+    case "live-data": return liveDataPage();
     case "machines": return machinesPage();
     case "machine-detail": return machineDetailPage();
     case "trends": return trendsPage();
@@ -560,6 +562,35 @@ function pageContent() {
     case "settings": return settingsPage();
     default: return dashboardPage();
   }
+}
+
+function liveDataPage() {
+  const machine = machines.find(item => item.id === "CAMS-01") || machines[0];
+  const readings = machine ? [...(machineHistory.get(machine.id) || [])].slice(-100).reverse() : [];
+  const byDate = new Map();
+  for (const reading of readings) {
+    const observed = new Date(reading.observedAt);
+    if (Number.isNaN(observed.getTime())) continue;
+    const date = observed.toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
+    if (!byDate.has(date)) byDate.set(date, []);
+    byDate.get(date).push({ reading, observed });
+  }
+  const dates = [...byDate].map(([date, entries], dateIndex) => `<details class="data-tree-node data-tree-date" ${dateIndex === 0 ? "open" : ""}><summary>${icon("calendar")}<strong>${date}</strong><span>${entries.length} sample${entries.length === 1 ? "" : "s"}</span></summary><div class="data-tree-children">${entries.map(({ reading, observed }, sampleIndex) => {
+    const time = observed.toLocaleTimeString("en-GB", { timeZone: "Asia/Kolkata", hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit", fractionalSecondDigits: 3 }).replaceAll(":", "-");
+    return `<details class="data-tree-node data-tree-sample" ${dateIndex === 0 && sampleIndex === 0 ? "open" : ""}><summary>${icon("clock")}<strong>${time}</strong><span>${escapeHtml(reading.status || "unknown")}</span></summary><div class="data-tree-values">
+      ${treeValue("flowLpm", reading.metrics?.flowLpm, "L/min")}${treeValue("pressureBar", reading.metrics?.pressureBar, "bar")}${treeValue("suctionKpa", reading.metrics?.suctionKpa, "kPa")}
+      ${treeValue("PV1", reading.raw?.pv1)}${treeValue("PV2", reading.raw?.pv2)}${treeValue("PV3", reading.raw?.pv3)}
+      ${treeValue("ERR1", reading.errors?.flow)}${treeValue("ERR2", reading.errors?.suction)}${treeValue("ERR3", reading.errors?.pressure)}
+      ${treeValue("source", reading.source || "—")}${treeValue("calibration", reading.calibrationVersion || "—")}
+    </div></details>`;
+  }).join("")}</div></details>`).join("");
+  return `${pageHead("Live sensor data", "Stored MQTT readings from the authenticated ESP32-S3 gateway", `<span class="updated-note"><i class="pulse-dot"></i>${state.lastTelemetryAt ? `Last sample · ${relativeTime(state.lastTelemetryAt)}` : "Waiting for ESP32"}</span><button class="secondary-btn" id="refresh-live-data">${icon("refresh")} Refresh</button>`)}
+    <section class="panel data-tree-panel"><div class="data-tree-root"><div class="data-tree-root-label">${icon("database")}<strong>CAMS</strong><span>MongoDB telemetry</span></div><div class="data-tree-children"><details class="data-tree-node data-tree-device" open><summary>${icon("machine")}<strong>${escapeHtml(machine?.id || "CAMS-01")}</strong><span>${machine ? machine.status : "Waiting"}</span></summary><div class="data-tree-children">${dates || `<div class="empty-state">${icon("pulse")}No sensor values received. Connect PLC → ESP32-S3 RS485 → MQTT.</div>`}</div></details></div></div></section>`;
+}
+
+function treeValue(label, value, unit = "") {
+  const display = value === null || value === undefined ? "—" : `${value}${unit ? ` ${unit}` : ""}`;
+  return `<div class="data-tree-value"><span>${escapeHtml(label)}</span><strong>${escapeHtml(display)}</strong></div>`;
 }
 
 function pageHead(title, subtitle, actions = "") {
@@ -915,6 +946,10 @@ function bindPageEvents() {
   document.querySelectorAll(".toggle").forEach(button => button.addEventListener("click", () => button.classList.toggle("on")));
   document.querySelector("#save-settings")?.addEventListener("click", () => showToast("Interface preferences saved for review."));
   document.querySelector("#refresh-users")?.addEventListener("click", () => loadManagedUsers());
+  document.querySelector("#refresh-live-data")?.addEventListener("click", () => {
+    const machineId = machines.find(machine => machine.id === "CAMS-01")?.id;
+    if (machineId) loadMachineHistory(machineId, "24h").catch(error => showToast(error.message));
+  });
   document.querySelector("#create-user-form")?.addEventListener("submit", async event => {
     event.preventDefault();
     const form = event.currentTarget;
@@ -969,6 +1004,10 @@ function navigate(page) {
   renderApp();
   if (page === "trends" && state.trendMachine) {
     loadMachineHistory(state.trendMachine, state.trendRange).catch(error => showToast(error.message));
+  }
+  if (page === "live-data") {
+    const machineId = machines.find(machine => machine.id === "CAMS-01")?.id;
+    if (machineId) loadMachineHistory(machineId, "24h").catch(error => showToast(error.message));
   }
   if (page === "users") loadManagedUsers().catch(error => showToast(error.message));
   window.scrollTo({ top: 0, behavior: "smooth" });
