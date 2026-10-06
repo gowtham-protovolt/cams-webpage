@@ -8,7 +8,8 @@ import { ingestTelemetry } from "../src/telemetry/store.js";
 const hasDatabase = Boolean(process.env.MONGODB_URI);
 
 test("stores telemetry, updates latest data, and rejects a duplicate sequence", { skip: !hasDatabase }, async () => {
-  const config = loadConfig();
+  const baseConfig = loadConfig();
+  const config = { ...baseConfig, mongoDb: `${baseConfig.mongoDb}_test` };
   const db = await connectDatabase(config);
   await Promise.all([
     db.collection("telemetry").deleteMany({}),
@@ -36,6 +37,7 @@ test("stores telemetry, updates latest data, and rejects a duplicate sequence", 
       latest: {
         siteId: "demo",
         machineId: "CAMS-01",
+        hierarchy: telemetry.hierarchy,
         observedAt: now,
         receivedAt: now,
         sequence: 987654,
@@ -50,6 +52,8 @@ test("stores telemetry, updates latest data, and rejects a duplicate sequence", 
     });
     assert.deepEqual(await ingestTelemetry(telemetry, 90), { duplicate: true });
     assert.equal(await db.collection("telemetry").countDocuments({}), 1);
+    assert.equal((await db.collection("telemetry").findOne({})).hierarchy.root, "CAMS");
+    assert.equal((await db.collection("telemetry").findOne({})).hierarchy.device, "CAMS-01");
     assert.equal((await db.collection("latestTelemetry").findOne({ machineId: "CAMS-01" })).metrics.flowLpm, 25.6);
   } finally {
     await closeDatabase();

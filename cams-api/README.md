@@ -71,6 +71,23 @@ The protected CAMS **Live Data** page provides the requested hierarchy from
 MongoDB as `CAMS → CAMS-01 → date → time → values`. Only payloads declaring
 `source: esp32-s3-rs485` are accepted.
 
+Every stored telemetry document contains an explicit India-time hierarchy:
+
+```text
+CAMS
+└── CAMS-01
+    └── YYYY-MM-DD
+        └── HH-mm-ss-SSS
+            ├── flow
+            ├── pressure
+            └── suction
+```
+
+After signing in, the same live structure is available as JSON at
+`/api/telemetry/tree?machineId=CAMS-01`. An optional `date=YYYY-MM-DD` query
+limits the response to one date. Sensor readings are stored in MongoDB rather
+than Docker log files; Docker logs contain service diagnostics only.
+
 ## Production container
 
 The production image serves the API and static CAMS webpage from the same HTTPS

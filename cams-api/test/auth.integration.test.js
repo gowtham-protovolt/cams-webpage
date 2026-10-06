@@ -9,7 +9,8 @@ import { loadConfig } from "../src/config.js";
 const hasDatabase = Boolean(process.env.MONGODB_URI);
 
 test("rejects invalid credentials and manages a real MongoDB session", { skip: !hasDatabase }, async () => {
-  const config = loadConfig();
+  const baseConfig = loadConfig();
+  const config = { ...baseConfig, mongoDb: `${baseConfig.mongoDb}_test` };
   const db = await connectDatabase(config);
   await Promise.all([db.collection("users").deleteMany({}), db.collection("sessions").deleteMany({})]);
   const now = new Date();

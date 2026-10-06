@@ -18,7 +18,8 @@ async function login(baseUrl, origin, identity, password) {
 }
 
 test("allows only owners to list, create, and disable CAMS users", { skip: !hasDatabase }, async () => {
-  const config = loadConfig();
+  const baseConfig = loadConfig();
+  const config = { ...baseConfig, mongoDb: `${baseConfig.mongoDb}_test` };
   const db = await connectDatabase(config);
   await Promise.all([db.collection("users").deleteMany({}), db.collection("sessions").deleteMany({})]);
   const now = new Date();

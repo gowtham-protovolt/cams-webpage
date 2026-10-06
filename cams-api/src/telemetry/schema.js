@@ -1,6 +1,18 @@
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const STATUSES = new Set(["running", "stopped", "alarm", "offline"]);
 const QUALITY_VALUES = new Set(["good", "uncertain", "bad"]);
+const INDIA_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+
+function hierarchyFor(machineId, observedAt) {
+  const indiaTime = new Date(observedAt.getTime() + INDIA_OFFSET_MS).toISOString();
+  return {
+    root: "CAMS",
+    device: machineId,
+    date: indiaTime.slice(0, 10),
+    time: indiaTime.slice(11, 23).replace(/[.:]/g, "-"),
+    timezone: "Asia/Kolkata"
+  };
+}
 
 function boundedNumber(value, name, minimum, maximum) {
   if (typeof value !== "number" || !Number.isFinite(value) || value < minimum || value > maximum) {
@@ -75,6 +87,7 @@ export function parseTelemetryMessage(topic, payload, receivedAt = new Date()) {
 
   return {
     series: { siteId, machineId },
+    hierarchy: hierarchyFor(machineId, observedAt),
     observedAt,
     receivedAt,
     sequence: body.sequence,

@@ -21,6 +21,7 @@ export async function ingestTelemetry(telemetry, retentionDays) {
     const latest = {
       siteId,
       machineId,
+      hierarchy: telemetry.hierarchy,
       observedAt: telemetry.observedAt,
       receivedAt: telemetry.receivedAt,
       sequence: telemetry.sequence,

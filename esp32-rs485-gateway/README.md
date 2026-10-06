@@ -56,7 +56,7 @@ codes, converted metrics, calibration version, and per-sensor quality.
 4. Compare all conversions against the supplied calibration points.
 5. Confirm one MQTT message every 500 ms and zero rejected backend messages.
 6. Confirm raw values, converted values, timestamps, and error codes in MongoDB.
-7. Compare the webpage with the PLC display before stopping the simulator.
+7. Compare the live webpage values with the PLC display under supervised operation.
 
 ## Current status
 
@@ -85,4 +85,3 @@ The conversion equations reproduce the provided measurements with a flow RMSE
 of approximately 0.67 L/min and suction RMSE of approximately 0.020 kPa. Final
 hardware results must be recorded after PLC register addressing, byte order,
 units, and electrical connections are confirmed on the supervised bench.
-

@@ -13,6 +13,8 @@ historical trend charts to the CAMS API. Live MQTT readings reach the browser
 through an authenticated server-sent event stream.
 The Live Data page presents stored samples as
 `CAMS → CAMS-01 → date → time → values` without reading Docker logs.
+Dashboard, Machines, Trends, and Reports continue to use the same authenticated
+MongoDB telemetry, so the existing CAMS webpage design remains the operator view.
 
 ## Responsible team member
 

@@ -23,6 +23,13 @@ test("parses a valid CAMS MQTT telemetry message", () => {
   assert.equal(telemetry.raw.pv2, 6066);
   assert.equal(telemetry.source, "esp32-s3-rs485");
   assert.equal(telemetry.status, "running");
+  assert.deepEqual(telemetry.hierarchy, {
+    root: "CAMS",
+    device: "CAMS-01",
+    date: "2026-10-05",
+    time: "17-30-00-000",
+    timezone: "Asia/Kolkata"
+  });
 });
 
 test("rejects malformed topics and out-of-range values", () => {
