@@ -123,14 +123,7 @@ const machineHistory = new Map();
 let telemetryStream = null;
 let telemetryRenderTimer = null;
 
-let alarms = [
-  { id: 1, time: "10:42:18", date: "Today", machine: "CAMS-03", parameter: "Pressure", value: "7.2 bar", severity: "Critical", status: "Active", message: "Pressure is outside the verified calibration band" },
-  { id: 2, time: "10:38:04", date: "Today", machine: "CAMS-04", parameter: "Communication", value: "No signal", severity: "Critical", status: "Active", message: "Gateway communication interrupted" },
-  { id: 3, time: "09:56:42", date: "Today", machine: "CAMS-11", parameter: "Pressure", value: "6.6 bar", severity: "Warning", status: "Acknowledged", message: "Pressure below preferred operating band" },
-  { id: 4, time: "08:21:15", date: "Today", machine: "CAMS-07", parameter: "State", value: "Stopped", severity: "Info", status: "Acknowledged", message: "Machine stopped by local operator" },
-  { id: 5, time: "17:48:02", date: "Yesterday", machine: "CAMS-06", parameter: "Suction", value: "1.9 kPa", severity: "Warning", status: "Resolved", message: "Suction returned to the verified range" },
-  { id: 6, time: "15:12:38", date: "Yesterday", machine: "CAMS-09", parameter: "Flow", value: "20.2 L/min", severity: "Warning", status: "Resolved", message: "Flow dropped below configured threshold" }
-];
+let alarms = [];
 
 const state = {
   authenticated: false,
@@ -620,6 +613,7 @@ function dashboardPage() {
   const stopped = machines.filter(m => m.status === "Stopped" || m.status === "Offline").length;
   const stoppedCount = machines.filter(m => m.status === "Stopped").length;
   const offlineCount = machines.filter(m => m.status === "Offline").length;
+  const activeAlarmCount = alarms.filter(alarm => alarm.status === "Active").length;
   const availability = machines.length ? Math.round(running / machines.length * 100) : 0;
   const snapshot = machines.find(machine => machine.id === "CAMS-01") || machines[0] || null;
   const snapshotHistory = snapshot ? historyFor(snapshot.id, "Pressure") : [];
@@ -631,7 +625,7 @@ function dashboardPage() {
       ${kpi("Total machines", machines.length, "Connected fleet", "machine", "teal")}
       ${kpi("Running", running, `${availability}% available`, "gauge", "green")}
       ${kpi("Stopped / offline", stopped, `${stoppedCount} stopped · ${offlineCount} offline`, "stop", "slate")}
-      ${kpi("Active alarms", 2, "2 require attention", "alarm", "red")}
+      ${kpi("Active alarms", activeAlarmCount, activeAlarmCount ? `${activeAlarmCount} require attention` : "No live alarms", "alarm", "red")}
     </section>
     <section class="dashboard-grid">
       <article class="panel">
@@ -649,7 +643,7 @@ function dashboardPage() {
     </section>
     <section class="panel">
       <header class="panel-head"><div class="panel-title"><h2>Recent alarms & events</h2><p>Latest operating exceptions from all machines</p></div><button class="panel-link" data-page="alarms">Open alarm centre →</button></header>
-      <div class="alarm-list">${alarmItems}</div>
+      <div class="alarm-list">${alarmItems || `<div class="empty-state">${icon("check")}No live alarms received.</div>`}</div>
     </section>`;
 }
 
@@ -741,10 +735,12 @@ function alarmsPage() {
   const filters = ["All", "Critical", "Warning", "Info", "Resolved"].map(filter => `<button class="filter-pill ${state.alarmFilter === filter ? "active" : ""}" data-alarm-filter="${filter}">${filter}</button>`).join("");
   const visible = alarms.filter(alarm => state.alarmFilter === "All" || (state.alarmFilter === "Resolved" ? alarm.status === "Resolved" : alarm.severity === state.alarmFilter));
   const rows = visible.map(alarm => `<tr><td><strong>${alarm.time}</strong><br><small>${alarm.date}</small></td><td><strong>${alarm.machine}</strong></td><td>${alarm.parameter}</td><td>${alarm.value}</td><td>${statusPill(alarm.severity)}</td><td>${statusPill(alarm.status)}</td><td><div class="table-actions"><button class="mini-action" data-view-alarm="${alarm.id}">View</button><button class="mini-action" data-ack="${alarm.id}" ${alarm.status !== "Active" ? "disabled" : ""}>Acknowledge</button><button class="mini-action" data-resolve="${alarm.id}" ${alarm.status === "Resolved" ? "disabled" : ""}>Resolve</button></div></td></tr>`).join("");
+  const count = (severity, status = "Active") => alarms.filter(alarm => alarm.severity === severity && alarm.status === status).length;
+  const resolved = alarms.filter(alarm => alarm.status === "Resolved").length;
   return `${pageHead("Alarms & events", "Review, acknowledge and resolve plant operating exceptions", `<button class="secondary-btn" id="export-alarms">${icon("download")} Export history</button>`)}
-    <section class="alarm-summary">${alarmSummary("Critical", 2, "alarm", "critical")}${alarmSummary("Warning", 5, "alarm", "warning")}${alarmSummary("Information", 12, "info", "info")}${alarmSummary("Resolved", 48, "check", "info")}</section>
+    <section class="alarm-summary">${alarmSummary("Critical", count("Critical"), "alarm", "critical")}${alarmSummary("Warning", count("Warning"), "alarm", "warning")}${alarmSummary("Information", count("Info"), "info", "info")}${alarmSummary("Resolved", resolved, "check", "info")}</section>
     <div class="filter-bar"><div class="filter-pills">${filters}</div><button class="secondary-btn">${icon("filter")} More filters</button></div>
-    <section class="panel"><div class="table-wrap"><table class="data-table"><thead><tr><th>Time</th><th>Machine</th><th>Parameter</th><th>Value</th><th>Severity</th><th>Status</th><th>Action</th></tr></thead><tbody>${rows}</tbody></table></div></section>`;
+    <section class="panel"><div class="table-wrap"><table class="data-table"><thead><tr><th>Time</th><th>Machine</th><th>Parameter</th><th>Value</th><th>Severity</th><th>Status</th><th>Action</th></tr></thead><tbody>${rows || `<tr><td colspan="7"><div class="empty-state">${icon("check")}No live alarms received.</div></td></tr>`}</tbody></table></div></section>`;
 }
 
 function alarmSummary(label, count, iconName, tone) {

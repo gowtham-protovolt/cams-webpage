@@ -82,6 +82,6 @@ before merging to `main`. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Confidentiality
 
-This repository contains application code and a synthetic local telemetry
-simulator only. Do not commit passwords, tokens, certificates, personal
+This repository contains application code and ESP32-S3 gateway firmware. It
+does not include a fake telemetry publisher. Do not commit passwords, tokens, certificates, personal
 information, customer data, real plant readings, or confidential documents.

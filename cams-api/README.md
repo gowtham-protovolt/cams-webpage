@@ -50,12 +50,6 @@ Start the API with:
 npm run dev
 ```
 
-Publish one controlled local telemetry cycle:
-
-```bash
-SIMULATOR_ONCE=true npm run simulate-telemetry
-```
-
 The local broker requires separate backend and device credentials. Its ACL lets
 the device publish only `cams/plant-01/CAMS-01/telemetry` and the matching status
 topic. Port 1884 is available to the protected LAN for ESP32 commissioning.
@@ -163,9 +157,11 @@ Pages. Invalid credentials were rejected, a valid MongoDB user created an
 `HttpOnly` session, the session survived a browser reload, and logout revoked
 the server record. The official MongoDB driver uses a reusable connection pool,
 and session records have a TTL index so expired sessions are removed
-automatically. A controlled device publisher delivered CAMS-01 readings at
-501–503 ms intervals through authenticated Mosquitto into MongoDB, protected
-history APIs, and the live SSE stream. Owner-only API tests also verify account listing and creation,
+automatically. The ESP32 payload contract was verified during commissioning
+development, then the synthetic publisher and its stored readings were removed.
+The active dashboard now accepts authenticated device publications through
+Mosquitto into MongoDB, protected history APIs, and the live SSE stream.
+Owner-only API tests also verify account listing and creation,
 password hashing, denial for non-owners, self-disable protection, and immediate
 session revocation for disabled accounts. Full production verification remains incomplete until the API,
 MongoDB, and broker are deployed with real secrets and device identities in

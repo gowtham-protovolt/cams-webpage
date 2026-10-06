@@ -102,7 +102,7 @@ connections, responsive rules, and core UI modules pass validation.
 3. Sign in with a real account stored in MongoDB.
 4. Reload the page and verify the server session is restored.
 5. Open the account menu and verify Sign out revokes the server session.
-6. Start the telemetry simulator and verify CAMS-01 updates at 500 ms intervals.
+6. Connect the ESP32 gateway and verify CAMS-01 updates at 500 ms intervals.
 7. Open Machines and test search and every status filter.
 8. Open CAMS-01 and verify flow, pressure, suction, raw PV1/PV2/PV3, ERR1/ERR2/ERR3,
    conversion quality, and calibration version.
@@ -116,8 +116,8 @@ connections, responsive rules, and core UI modules pass validation.
 
 ### Recorded test result
 
-- **Configuration:** Local CAMS API, MongoDB 7.0.43, Mosquitto 2.0.22, MQTT
-  simulator, static UI, current Chromium browser
+- **Configuration:** Local CAMS API, MongoDB 7.0.43, Mosquitto 2.0.22,
+  compile-verified ESP32 gateway, static UI, current Chromium browser
 - **Date:** 2026-10-06
 - **Responsible:** CAMS Project Team
 - **Expected result:** Invalid credentials fail; a valid MongoDB account signs
@@ -149,8 +149,8 @@ connections, responsive rules, and core UI modules pass validation.
 
 ## Known issues and limitations
 
-- The included simulator produces synthetic readings for local testing; no
-  production sensor data is included in the repository.
+- No simulated telemetry publisher is included. The dashboard waits for
+  authenticated readings from the ESP32-S3 gateway.
 - Production login remains unavailable until the API and MongoDB are hosted and
   the GitHub repository variable `CAMS_API_URL` is configured.
 - Password-reset email, MFA, role editing, account deletion, and authentication
