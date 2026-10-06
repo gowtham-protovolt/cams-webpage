@@ -24,6 +24,8 @@ cams-webpage/
 │   ├── src/
 │   └── test/
 ├── esp32-rs485-gateway/
+│   ├── arduino/cams_esp32_rs485_gateway/
+│   │   └── cams_esp32_rs485_gateway.ino
 │   ├── include/
 │   ├── src/
 │   └── platformio.ini
