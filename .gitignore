@@ -13,3 +13,5 @@ tmp/
 *.pem
 *.key
 *.crt
+cams-complete-project*/
+cams-complete-project-*.zip

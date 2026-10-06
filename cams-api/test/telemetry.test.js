@@ -27,7 +27,7 @@ test("parses a valid CAMS MQTT telemetry message", () => {
     root: "CAMS",
     device: "CAMS-01",
     date: "2026-10-05",
-    time: "17-30-00-000",
+    time: "17-30-00",
     timezone: "Asia/Kolkata"
   });
 });

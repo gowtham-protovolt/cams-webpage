@@ -9,7 +9,7 @@ function hierarchyFor(machineId, observedAt) {
     root: "CAMS",
     device: machineId,
     date: indiaTime.slice(0, 10),
-    time: indiaTime.slice(11, 23).replace(/[.:]/g, "-"),
+    time: indiaTime.slice(11, 19).replaceAll(":", "-"),
     timezone: "Asia/Kolkata"
   };
 }

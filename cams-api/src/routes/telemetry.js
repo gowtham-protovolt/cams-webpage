@@ -2,25 +2,10 @@ import { Router } from "express";
 import { getDatabase } from "../db.js";
 import { requireAuth } from "../middleware/auth.js";
 import { telemetryEvents } from "../telemetry/events.js";
+import { buildTelemetryTree } from "../telemetry/tree.js";
 
 const MACHINE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const TREE_DATE = /^\d{4}-\d{2}-\d{2}$/;
-
-function treeValue(reading) {
-  return {
-    flow: reading.metrics.flowLpm,
-    pressure: reading.metrics.pressureBar,
-    suction: reading.metrics.suctionKpa,
-    units: { flow: "L/min", pressure: "bar", suction: "kPa" },
-    raw: reading.raw || null,
-    errors: reading.errors || null,
-    quality: reading.quality || null,
-    status: reading.status,
-    timestamp: reading.observedAt,
-    receivedAt: reading.receivedAt,
-    source: reading.source
-  };
-}
 
 export function telemetryRouter() {
   const router = Router();
@@ -72,27 +57,21 @@ export function telemetryRouter() {
 
   router.get("/telemetry/tree", async (request, response, next) => {
     try {
-      const machineId = String(request.query.machineId || "CAMS-01");
+      const machineId = request.query.machineId === undefined ? undefined : String(request.query.machineId);
       const siteId = String(request.query.siteId || "plant-01");
       const date = request.query.date === undefined ? undefined : String(request.query.date);
-      if (!MACHINE_ID.test(machineId) || !MACHINE_ID.test(siteId)) return response.status(400).json({ error: "Invalid machine identifier." });
+      if ((machineId !== undefined && !MACHINE_ID.test(machineId)) || !MACHINE_ID.test(siteId)) return response.status(400).json({ error: "Invalid machine identifier." });
       if (date !== undefined && !TREE_DATE.test(date)) return response.status(400).json({ error: "Date must use YYYY-MM-DD." });
       const limit = Math.min(Math.max(Number.parseInt(request.query.limit || "1000", 10) || 1000, 1), 2000);
       const query = {
         "series.siteId": siteId,
-        "series.machineId": machineId,
+        ...(machineId ? { "series.machineId": machineId } : {}),
         ...(date ? { "hierarchy.date": date } : {})
       };
       const readings = await getDatabase().collection("telemetry").find(query).sort({ observedAt: -1 }).limit(limit).toArray();
-      const deviceTree = {};
-      for (const reading of readings.reverse()) {
-        const readingDate = reading.hierarchy?.date;
-        const readingTime = reading.hierarchy?.time;
-        if (!readingDate || !readingTime) continue;
-        deviceTree[readingDate] ||= {};
-        deviceTree[readingDate][readingTime] = treeValue(reading);
-      }
-      response.json({ CAMS: { [machineId]: deviceTree } });
+      const tree = buildTelemetryTree(readings.reverse());
+      if (machineId) tree.CAMS[machineId] ||= {};
+      response.json(tree);
     } catch (error) {
       next(error);
     }
