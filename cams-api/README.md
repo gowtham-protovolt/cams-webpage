@@ -50,15 +50,43 @@ Start the API with:
 npm run dev
 ```
 
-Publish one controlled local telemetry cycle:
+To run the complete local stack in Docker:
 
 ```bash
-SIMULATOR_ONCE=true npm run simulate-telemetry
+docker compose up -d --build
 ```
 
-Production MQTT must use `mqtts://` or `wss://`, broker authentication, unique
-device identities, restricted topic permissions, and secrets stored outside the
-repository.
+Open <http://localhost:3100>. Docker should show `CAMS`, `CAMS-MongoDB`, and
+`CAMS-Mosquitto`. The one-time `CAMS-MQTT-Config` container exits successfully
+after creating credentials.
+
+The local broker requires separate backend and device credentials. Its ACL lets
+the device publish only `cams/plant-01/CAMS-01/telemetry` and the matching status
+topic. Port 1884 is available to the protected LAN for ESP32 commissioning.
+Production MQTT must use `mqtts://` or `wss://`, unique device identities, and
+secrets stored outside the repository.
+
+Mosquitto is a transient publish/subscribe broker, not a stored-data browser.
+The protected CAMS **Live Data** page provides the requested hierarchy from
+MongoDB as `CAMS → CAMS-01 → date → time → values`. Only payloads declaring
+`source: esp32-s3-rs485` are accepted.
+
+Every stored telemetry document contains an explicit India-time hierarchy:
+
+```text
+CAMS
+└── CAMS-01
+    └── YYYY-MM-DD
+        └── HH-mm-ss-SSS
+            ├── flow
+            ├── pressure
+            └── suction
+```
+
+After signing in, the same live structure is available as JSON at
+`/api/telemetry/tree?machineId=CAMS-01`. An optional `date=YYYY-MM-DD` query
+limits the response to one date. Sensor readings are stored in MongoDB rather
+than Docker log files; Docker logs contain service diagnostics only.
 
 ## Production container
 
@@ -125,9 +153,12 @@ longer works.
 - Frontend API integration: implemented and browser-tested locally
 - MongoDB machine inventory and time-series telemetry: implemented locally
 - MQTT QoS 1 ingestion and duplicate protection: implemented locally
+- Authenticated Mosquitto device/backend identities and topic ACL: implemented locally
+- PV1/PV2/PV3, ERR1/ERR2/ERR3, calibration, and quality storage: implemented locally
 - Protected machine/history APIs and live SSE stream: implemented locally
 - Authenticated XLSX and PDF export endpoints: implemented locally
 - Same-origin production container and configuration validation: implemented
+- Owner-only account listing, creation, and enable/disable controls: implemented
 - Production MongoDB and API hosting: not configured
 - Password-reset email and MFA: not implemented
 
@@ -140,12 +171,13 @@ longer works.
 - For reliable production cookies, host the frontend and API under the same
   registered domain or serve the frontend from the API host. Unrelated-domain
   third-party cookies can be blocked by browsers.
-- Password-reset email, MFA, user administration, and security audit events are
-  not included yet.
-- The bundled Mosquitto configuration allows anonymous access and is strictly
-  for a loopback-bound local development broker; never deploy it publicly.
-- Production device certificates, MQTT ACLs, broker hosting, and the final
-  hardware payload mapping are not configured.
+- Password-reset email, MFA, role editing, account deletion, and security audit
+  events are not included yet.
+- The bundled Mosquitto configuration is authenticated but plaintext; use it
+  only on a protected commissioning LAN and never expose port 1884 to the internet.
+- Production TLS certificates and managed broker hosting are not configured.
+- The PLC slave ID, baud/parity, ESP32 pins, Modbus offset convention, and DINT
+  word order must be confirmed on a supervised bench before plant use.
 - The API must be deployed behind HTTPS and must not expose MongoDB publicly.
 - Exports are limited to 5,000 telemetry readings per request to keep memory and
   response sizes bounded.
@@ -157,9 +189,13 @@ Pages. Invalid credentials were rejected, a valid MongoDB user created an
 `HttpOnly` session, the session survived a browser reload, and logout revoked
 the server record. The official MongoDB driver uses a reusable connection pool,
 and session records have a TTL index so expired sessions are removed
-automatically. A controlled MQTT publisher delivered readings for all 13
-machines through Mosquitto into MongoDB, protected history APIs, and the live
-SSE stream. Full production verification remains incomplete until the API,
+automatically. The ESP32 payload contract was verified during commissioning
+development, then the synthetic publisher and its stored readings were removed.
+The active dashboard now accepts authenticated device publications through
+Mosquitto into MongoDB, protected history APIs, and the live SSE stream.
+Owner-only API tests also verify account listing and creation,
+password hashing, denial for non-owners, self-disable protection, and immediate
+session revocation for disabled accounts. Full production verification remains incomplete until the API,
 MongoDB, and broker are deployed with real secrets and device identities in
 approved secure storage. Generated XLSX files passed ZIP/OOXML validation, and
 the landscape PDF table was rendered and visually checked for clipping,
