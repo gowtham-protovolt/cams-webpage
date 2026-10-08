@@ -9,8 +9,7 @@
     "start": "node src/server.js",
     "test": "node --test --test-concurrency=1",
     "create-admin": "node scripts/create-admin.js",
-    "seed-machines": "node scripts/seed-machines.js",
-    "simulate-telemetry": "node scripts/simulate-telemetry.js"
+    "seed-machines": "node scripts/seed-machines.js"
   },
   "engines": {
     "node": ">=24"

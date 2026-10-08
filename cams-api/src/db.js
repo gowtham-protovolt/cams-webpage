@@ -47,7 +47,8 @@ async function ensureIndexes(db) {
     db.collection("machines").createIndex({ siteId: 1, machineId: 1 }, { unique: true, name: "unique_machine" }),
     db.collection("latestTelemetry").createIndex({ siteId: 1, machineId: 1 }, { unique: true, name: "unique_latest_machine" }),
     db.collection("telemetryReceipts").createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0, name: "expire_receipts" }),
-    db.collection("telemetry").createIndex({ "series.siteId": 1, "series.machineId": 1, observedAt: -1 }, { name: "telemetry_by_machine_time" })
+    db.collection("telemetry").createIndex({ "series.siteId": 1, "series.machineId": 1, observedAt: -1 }, { name: "telemetry_by_machine_time" }),
+    db.collection("telemetry").createIndex({ "series.siteId": 1, "series.machineId": 1, "hierarchy.date": -1, observedAt: -1 }, { name: "telemetry_by_tree_date" })
   ]);
 }
 

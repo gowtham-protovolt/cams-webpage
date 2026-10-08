@@ -1,7 +1,7 @@
 services:
   mongodb:
     image: mongo:7.0.43
-    container_name: cams-api-mongodb
+    container_name: CAMS-MongoDB
     restart: unless-stopped
     ports:
       - "127.0.0.1:27018:27017"
@@ -13,14 +13,78 @@ services:
       timeout: 5s
       retries: 10
 
+  mqtt-config:
+    image: eclipse-mosquitto:2.0.22
+    container_name: CAMS-MQTT-Config
+    restart: "no"
+    environment:
+      MQTT_BACKEND_USERNAME: ${MQTT_USERNAME:?Set MQTT_USERNAME in cams-api/.env}
+      MQTT_BACKEND_PASSWORD: ${MQTT_PASSWORD:?Set MQTT_PASSWORD in cams-api/.env}
+      MQTT_DEVICE_USERNAME: ${MQTT_DEVICE_USERNAME:?Set MQTT_DEVICE_USERNAME in cams-api/.env}
+      MQTT_DEVICE_PASSWORD: ${MQTT_DEVICE_PASSWORD:?Set MQTT_DEVICE_PASSWORD in cams-api/.env}
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        rm -f /mosquitto/secrets/passwords /mosquitto/secrets/acl
+        mosquitto_passwd -b -c /mosquitto/secrets/passwords "$$MQTT_BACKEND_USERNAME" "$$MQTT_BACKEND_PASSWORD"
+        mosquitto_passwd -b /mosquitto/secrets/passwords "$$MQTT_DEVICE_USERNAME" "$$MQTT_DEVICE_PASSWORD"
+        printf 'user %s\ntopic read cams/+/+/telemetry\ntopic read cams/+/+/status\n\nuser %s\ntopic write cams/plant-01/CAMS-01/telemetry\ntopic write cams/plant-01/CAMS-01/status\n' "$$MQTT_BACKEND_USERNAME" "$$MQTT_DEVICE_USERNAME" > /mosquitto/secrets/acl
+        chown -R 1883:1883 /mosquitto/secrets /mosquitto/data
+        chmod 0600 /mosquitto/secrets/passwords /mosquitto/secrets/acl
+    volumes:
+      - cams-mqtt-secrets:/mosquitto/secrets
+      - cams-mqtt-data:/mosquitto/data
+
   mqtt:
     image: eclipse-mosquitto:2.0.22
-    container_name: cams-api-mqtt
+    container_name: CAMS-Mosquitto
     restart: unless-stopped
+    entrypoint: ["/usr/sbin/mosquitto", "-c", "/mosquitto/config/mosquitto.conf"]
+    depends_on:
+      mqtt-config:
+        condition: service_completed_successfully
     ports:
-      - "127.0.0.1:1884:1883"
+      - "1884:1883"
     volumes:
       - ./docker/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - cams-mqtt-secrets:/mosquitto/secrets:ro
+      - cams-mqtt-data:/mosquitto/data
+
+  app:
+    build:
+      context: ..
+      dockerfile: cams-api/Dockerfile
+    container_name: CAMS
+    restart: unless-stopped
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      mqtt:
+        condition: service_started
+    ports:
+      - "3100:3000"
+    environment:
+      NODE_ENV: development
+      PORT: 3000
+      SERVE_WEB: "true"
+      WEB_ROOT: /app/public
+      MONGODB_URI: mongodb://mongodb:27017
+      MONGODB_DB: cams_local
+      CORS_ORIGINS: http://localhost:3100,http://127.0.0.1:3100
+      COOKIE_NAME: cams_session
+      COOKIE_SECURE: "false"
+      COOKIE_SAME_SITE: lax
+      SESSION_HOURS: 8
+      REMEMBER_SESSION_DAYS: 7
+      TELEMETRY_RETENTION_DAYS: 7
+      MQTT_ENABLED: "true"
+      MQTT_URL: mqtt://mqtt:1883
+      MQTT_USERNAME: ${MQTT_USERNAME:?Set MQTT_USERNAME in cams-api/.env}
+      MQTT_PASSWORD: ${MQTT_PASSWORD:?Set MQTT_PASSWORD in cams-api/.env}
+      MQTT_TOPIC: cams/+/+/telemetry
+      MQTT_CLIENT_ID: cams-api-docker
 
 volumes:
   cams-mongodb-data:
+  cams-mqtt-secrets:
+  cams-mqtt-data:

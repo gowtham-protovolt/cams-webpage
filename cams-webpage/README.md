@@ -4,13 +4,17 @@
 
 **CAMS Webpage** is a responsive industrial monitoring interface for reviewing
 the current condition of a compressed-air network. The prototype presents a
-login experience, a plant dashboard, 13 compressor records, machine details,
+login experience, a plant dashboard, the CAMS-01 compressor, machine details,
 parameter trends, alarms, and preview screens for later modules.
 
 The objective is to deliver the monitoring interface in controlled stages. The
 current branch connects login, machine inventory, current readings, and
 historical trend charts to the CAMS API. Live MQTT readings reach the browser
 through an authenticated server-sent event stream.
+The Live Data page presents stored samples as
+`CAMS → CAMS-01 → date → time → values` without reading Docker logs.
+Dashboard, Machines, Trends, and Reports continue to use the same authenticated
+MongoDB telemetry, so the existing CAMS webpage design remains the operator view.
 
 ## Responsible team member
 
@@ -35,7 +39,7 @@ No hardware is required to review this UI prototype.
 The intended future monitoring system may include:
 
 - Industrial air compressors
-- Flow, pressure, suction, and temperature sensors
+- Flow, pressure, and suction sensors
 - PLC with a verified register map
 - RS485/Modbus communication where applicable
 - ESP32-S3 edge gateway if approved by the final architecture
@@ -102,30 +106,33 @@ connections, responsive rules, and core UI modules pass validation.
 3. Sign in with a real account stored in MongoDB.
 4. Reload the page and verify the server session is restored.
 5. Open the account menu and verify Sign out revokes the server session.
-6. Start the telemetry simulator and verify the dashboard shows the machines
-   registered in MongoDB and four KPI cards.
+6. Connect the ESP32 gateway and verify CAMS-01 updates at 1-second intervals.
 7. Open Machines and test search and every status filter.
-8. Open a machine and verify its sensors, trend, health, service, and alarms.
-9. Change machine, parameter, and time range on Trends and verify the chart and
+8. Open CAMS-01 and verify flow, pressure, suction, raw PV1/PV2/PV3, ERR1/ERR2/ERR3,
+   conversion quality, and calibration version.
+9. Open Live Data and verify the newest timestamp expands to converted values,
+   raw PLC values, error registers, source, and calibration.
+10. Change machine, parameter, and time range on Trends and verify the chart and
    statistics use stored telemetry readings.
-10. Filter alarms and test View, Acknowledge, and Resolve.
-11. Review Maintenance, Reports, Settings, and Energy preview screens.
-12. Repeat at tablet and mobile widths, including the mobile sidebar.
-13. Check the browser console for errors.
-14. Open Reports and download telemetry and fleet files in both XLSX and PDF.
+11. Filter alarms and test View, Acknowledge, and Resolve.
+12. Review Maintenance, Reports, Settings, and Energy preview screens.
+13. Repeat at tablet and mobile widths, including the mobile sidebar.
+14. Check the browser console for errors.
+15. Open Reports and download telemetry and fleet files in both XLSX and PDF.
 
 ### Recorded test result
 
-- **Configuration:** Local CAMS API, MongoDB 7.0.43, Mosquitto 2.0.22, MQTT
-  simulator, static UI, current Chromium browser
-- **Date:** 2026-10-05
+- **Configuration:** Local CAMS API, MongoDB 7.0.43, Mosquitto 2.0.22,
+  compile-verified ESP32 gateway, static UI, current Chromium browser
+- **Date:** 2026-10-06
 - **Responsible:** CAMS Project Team
 - **Expected result:** Invalid credentials fail; a valid MongoDB account signs
   in; MQTT data appears in the machine list and charts; the session survives
   reload and is revoked on logout
-- **Observed result:** All 20 UI checks and all 9 API tests passed. A browser
-  session restored after reload, loaded 13 MongoDB machines, received a live
-  MQTT cycle through SSE, and displayed stored pressure statistics.
+- **Observed result:** The authenticated browser loaded 13 MongoDB machines and
+  displayed CAMS-01 flow, pressure, suction, raw PLC values, error registers,
+  calibration version, and quality. Five bounded samples were stored with
+  501–503 ms intervals.
 
 ## Current status
 
@@ -138,6 +145,7 @@ connections, responsive rules, and core UI modules pass validation.
 - Automated structural checks: implemented
 - Authentication API integration: implemented locally
 - MQTT integration: implemented locally
+- Three calibrated sensor fields and PLC diagnostics: implemented locally
 - Live dashboard and stored trend integration: implemented locally
 - Authenticated XLSX and PDF exports: implemented locally
 - Same-origin production web/API container: implemented locally
@@ -147,8 +155,8 @@ connections, responsive rules, and core UI modules pass validation.
 
 ## Known issues and limitations
 
-- The included simulator produces synthetic readings for local testing; no
-  production sensor data is included in the repository.
+- No simulated telemetry publisher is included. The dashboard waits for
+  authenticated readings from the ESP32-S3 gateway.
 - Production login remains unavailable until the API and MongoDB are hosted and
   the GitHub repository variable `CAMS_API_URL` is configured.
 - Password-reset email, MFA, role editing, account deletion, and authentication

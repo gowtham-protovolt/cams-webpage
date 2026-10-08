@@ -123,14 +123,7 @@ const machineHistory = new Map();
 let telemetryStream = null;
 let telemetryRenderTimer = null;
 
-let alarms = [
-  { id: 1, time: "10:42:18", date: "Today", machine: "CAMS-03", parameter: "Temperature", value: "45.8 °C", severity: "Critical", status: "Active", message: "Discharge temperature above high limit" },
-  { id: 2, time: "10:38:04", date: "Today", machine: "CAMS-04", parameter: "Communication", value: "No signal", severity: "Critical", status: "Active", message: "Gateway communication interrupted" },
-  { id: 3, time: "09:56:42", date: "Today", machine: "CAMS-11", parameter: "Pressure", value: "6.6 bar", severity: "Warning", status: "Acknowledged", message: "Pressure below preferred operating band" },
-  { id: 4, time: "08:21:15", date: "Today", machine: "CAMS-07", parameter: "State", value: "Stopped", severity: "Info", status: "Acknowledged", message: "Machine stopped by local operator" },
-  { id: 5, time: "17:48:02", date: "Yesterday", machine: "CAMS-06", parameter: "Temperature", value: "43.1 °C", severity: "Warning", status: "Resolved", message: "Temperature returned to normal band" },
-  { id: 6, time: "15:12:38", date: "Yesterday", machine: "CAMS-09", parameter: "Flow", value: "20.2 L/min", severity: "Warning", status: "Resolved", message: "Flow dropped below configured threshold" }
-];
+let alarms = [];
 
 const state = {
   authenticated: false,
@@ -157,6 +150,7 @@ const state = {
 
 const navItems = [
   { id: "dashboard", label: "Dashboard", icon: "dashboard", group: "Monitor" },
+  { id: "live-data", label: "Live Data", icon: "database", group: "Monitor" },
   { id: "machines", label: "Machines", icon: "machine", group: "Monitor" },
   { id: "trends", label: "Trends", icon: "trend", group: "Monitor" },
   { id: "alarms", label: "Alarms & Events", icon: "alarm", group: "Monitor" },
@@ -225,8 +219,7 @@ function healthScore(status, metrics) {
   let score = 100;
   if (metrics.pressureBar < 6.8 || metrics.pressureBar > 7.5) score -= 12;
   if (metrics.flowLpm < 22 || metrics.flowLpm > 28) score -= 8;
-  if (metrics.suctionBar < -1 || metrics.suctionBar > -0.5) score -= 8;
-  if (metrics.temperatureC > 43) score -= 18;
+  if (metrics.suctionKpa < 0.6 || metrics.suctionKpa > 1.8) score -= 8;
   return Math.max(0, score);
 }
 
@@ -237,14 +230,18 @@ function mapMachine(item) {
   const receivedAt = telemetry?.receivedAt || item.lastSeenAt || null;
   return {
     id: item.id,
-    siteId: item.siteId || "demo",
+    siteId: item.siteId || "plant-01",
     name: item.name || item.id,
     zone: item.zone || "Unassigned",
     status,
     pressure: metrics?.pressureBar ?? null,
-    temp: metrics?.temperatureC ?? null,
     flow: metrics?.flowLpm ?? null,
-    suction: metrics?.suctionBar ?? null,
+    suction: metrics?.suctionKpa ?? null,
+    raw: telemetry?.raw || null,
+    errors: telemetry?.errors || null,
+    quality: telemetry?.quality || null,
+    calibrationVersion: telemetry?.calibrationVersion || null,
+    source: telemetry?.source || null,
     health: healthScore(status, metrics),
     updated: relativeTime(receivedAt),
     receivedAt,
@@ -254,13 +251,18 @@ function mapMachine(item) {
 
 function normalizeReading(payload) {
   return {
-    siteId: payload.siteId || payload.series?.siteId || "demo",
+    siteId: payload.siteId || payload.series?.siteId || "plant-01",
     machineId: payload.machineId || payload.series?.machineId,
     observedAt: payload.observedAt,
     receivedAt: payload.receivedAt,
     sequence: payload.sequence,
     status: payload.status,
-    metrics: payload.metrics
+    metrics: payload.metrics,
+    raw: payload.raw || null,
+    errors: payload.errors || null,
+    quality: payload.quality || null,
+    calibrationVersion: payload.calibrationVersion || null,
+    source: payload.source || null
   };
 }
 
@@ -394,7 +396,7 @@ async function downloadExport(path) {
 function telemetryExportPath(machineId, range, format) {
   const machine = machines.find(item => item.id === machineId);
   const from = new Date(Date.now() - historyRangeMilliseconds(range)).toISOString();
-  const params = new URLSearchParams({ machineId, siteId: machine?.siteId || "demo", from });
+  const params = new URLSearchParams({ machineId, siteId: machine?.siteId || "plant-01", from });
   return `/api/exports/telemetry/${format}?${params}`;
 }
 
@@ -445,7 +447,7 @@ function renderLogin() {
       <div class="powered-by"><span>Powered by</span><span class="owner-mark">E7</span></div>
       <div class="visual-copy">
         <h2>Clarity for every compressor.</h2>
-        <p>One operational view of pressure, flow, suction and temperature across your complete compressed air network.</p>
+        <p>One operational view of pressure, flow and suction across your complete compressed air network.</p>
       </div>
       <div class="system-route"><span>Sensors</span><i class="route-dot"></i><span>PLC</span><i class="route-dot"></i><span>ESP32-S3</span><i class="route-dot"></i><span>MQTT</span><i class="route-dot"></i><b>CAMS</b></div>
     </aside>
@@ -532,7 +534,7 @@ function renderApp() {
       <div class="header-plant"><button class="icon-btn mobile-menu" id="mobile-menu" aria-label="Open menu">${icon("menu")}</button><div><div class="plant-name">Demo Spinning Plant</div><div class="plant-meta"><i class="live-dot"></i><span>${networkLabel}</span></div></div></div>
       <div class="header-right">
         <div class="clock"><strong id="header-time">--:--:--</strong><span id="header-date">--</span></div>
-        <button class="icon-btn notification-btn" id="notification-button" aria-label="Notifications">${icon("bell")}<span class="notification-badge">2</span></button>
+        <button class="icon-btn notification-btn" id="notification-button" aria-label="Notifications">${icon("bell")}${alarms.filter(alarm => alarm.status === "Active").length ? `<span class="notification-badge">${alarms.filter(alarm => alarm.status === "Active").length}</span>` : ""}</button>
         <div class="account-control">
           <button class="user-menu" id="user-menu" aria-haspopup="menu" aria-expanded="${state.userMenuOpen}"><span class="avatar">${escapeHtml(initials(user.displayName))}</span><span class="user-copy"><strong>${safeName}</strong><span>${safeRole}</span></span>${icon("chevronDown")}</button>
           ${state.userMenuOpen ? `<div class="account-menu" role="menu"><div class="account-summary"><span class="avatar">${escapeHtml(initials(user.displayName))}</span><div><strong>${safeName}</strong><span>${escapeHtml(user.identity)}</span></div></div><div class="account-session">${icon("shield")}<span>Secure server session active</span></div><button id="sign-out" class="account-action" role="menuitem">${icon("logout")}<span>Sign out</span></button></div>` : ""}
@@ -548,6 +550,7 @@ function renderApp() {
 
 function pageContent() {
   switch (state.page) {
+    case "live-data": return liveDataPage();
     case "machines": return machinesPage();
     case "machine-detail": return machineDetailPage();
     case "trends": return trendsPage();
@@ -561,6 +564,35 @@ function pageContent() {
   }
 }
 
+function liveDataPage() {
+  const machine = machines.find(item => item.id === "CAMS-01") || machines[0];
+  const readings = machine ? [...(machineHistory.get(machine.id) || [])].slice(-100).reverse() : [];
+  const byDate = new Map();
+  for (const reading of readings) {
+    const observed = new Date(reading.observedAt);
+    if (Number.isNaN(observed.getTime())) continue;
+    const date = observed.toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
+    if (!byDate.has(date)) byDate.set(date, []);
+    byDate.get(date).push({ reading, observed });
+  }
+  const dates = [...byDate].map(([date, entries], dateIndex) => `<details class="data-tree-node data-tree-date" ${dateIndex === 0 ? "open" : ""}><summary>${icon("calendar")}<strong>${date}</strong><span>${entries.length} sample${entries.length === 1 ? "" : "s"}</span></summary><div class="data-tree-children">${entries.map(({ reading, observed }, sampleIndex) => {
+    const time = observed.toLocaleTimeString("en-GB", { timeZone: "Asia/Kolkata", hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit", fractionalSecondDigits: 3 }).replaceAll(":", "-");
+    return `<details class="data-tree-node data-tree-sample" ${dateIndex === 0 && sampleIndex === 0 ? "open" : ""}><summary>${icon("clock")}<strong>${time}</strong><span>${escapeHtml(reading.status || "unknown")}</span></summary><div class="data-tree-values">
+      ${treeValue("flowLpm", reading.metrics?.flowLpm, "L/min")}${treeValue("pressureBar", reading.metrics?.pressureBar, "bar")}${treeValue("suctionKpa", reading.metrics?.suctionKpa, "kPa")}
+      ${treeValue("PV1", reading.raw?.pv1)}${treeValue("PV2", reading.raw?.pv2)}${treeValue("PV3", reading.raw?.pv3)}
+      ${treeValue("ERR1", reading.errors?.flow)}${treeValue("ERR2", reading.errors?.suction)}${treeValue("ERR3", reading.errors?.pressure)}
+      ${treeValue("source", reading.source || "—")}${treeValue("calibration", reading.calibrationVersion || "—")}
+    </div></details>`;
+  }).join("")}</div></details>`).join("");
+  return `${pageHead("Live sensor data", "Stored MQTT readings from the authenticated ESP32-S3 gateway", `<span class="updated-note"><i class="pulse-dot"></i>${state.lastTelemetryAt ? `Last sample · ${relativeTime(state.lastTelemetryAt)}` : "Waiting for ESP32"}</span><button class="secondary-btn" id="refresh-live-data">${icon("refresh")} Refresh</button>`)}
+    <section class="panel data-tree-panel"><div class="data-tree-root"><div class="data-tree-root-label">${icon("database")}<strong>CAMS</strong><span>MongoDB telemetry</span></div><div class="data-tree-children"><details class="data-tree-node data-tree-device" open><summary>${icon("machine")}<strong>${escapeHtml(machine?.id || "CAMS-01")}</strong><span>${machine ? machine.status : "Waiting"}</span></summary><div class="data-tree-children">${dates || `<div class="empty-state">${icon("pulse")}No sensor values received. Connect PLC → ESP32-S3 RS485 → MQTT.</div>`}</div></details></div></div></section>`;
+}
+
+function treeValue(label, value, unit = "") {
+  const display = value === null || value === undefined ? "—" : `${value}${unit ? ` ${unit}` : ""}`;
+  return `<div class="data-tree-value"><span>${escapeHtml(label)}</span><strong>${escapeHtml(display)}</strong></div>`;
+}
+
 function pageHead(title, subtitle, actions = "") {
   return `<div class="page-head"><div><h1>${title}</h1><p>${subtitle}</p></div>${actions ? `<div class="page-actions">${actions}</div>` : ""}</div>`;
 }
@@ -568,8 +600,7 @@ function pageHead(title, subtitle, actions = "") {
 const parameterConfig = {
   Pressure: { field: "pressureBar", unit: "bar", fallbackSpan: 1.2 },
   Flow: { field: "flowLpm", unit: "L/min", fallbackSpan: 10 },
-  Suction: { field: "suctionBar", unit: "bar", fallbackSpan: 0.8 },
-  Temperature: { field: "temperatureC", unit: "°C", fallbackSpan: 12 }
+  Suction: { field: "suctionKpa", unit: "kPa", fallbackSpan: 1.2 }
 };
 
 function historyFor(machineId, parameter) {
@@ -613,6 +644,7 @@ function dashboardPage() {
   const stopped = machines.filter(m => m.status === "Stopped" || m.status === "Offline").length;
   const stoppedCount = machines.filter(m => m.status === "Stopped").length;
   const offlineCount = machines.filter(m => m.status === "Offline").length;
+  const activeAlarmCount = alarms.filter(alarm => alarm.status === "Active").length;
   const availability = machines.length ? Math.round(running / machines.length * 100) : 0;
   const snapshot = machines.find(machine => machine.id === "CAMS-01") || machines[0] || null;
   const snapshotHistory = snapshot ? historyFor(snapshot.id, "Pressure") : [];
@@ -624,13 +656,13 @@ function dashboardPage() {
       ${kpi("Total machines", machines.length, "Connected fleet", "machine", "teal")}
       ${kpi("Running", running, `${availability}% available`, "gauge", "green")}
       ${kpi("Stopped / offline", stopped, `${stoppedCount} stopped · ${offlineCount} offline`, "stop", "slate")}
-      ${kpi("Active alarms", 2, "2 require attention", "alarm", "red")}
+      ${kpi("Active alarms", activeAlarmCount, activeAlarmCount ? `${activeAlarmCount} require attention` : "No live alarms", "alarm", "red")}
     </section>
     <section class="dashboard-grid">
       <article class="panel">
         <header class="panel-head"><div class="panel-title"><h2>Live operating snapshot</h2><p>${snapshot ? `${snapshot.id} · ${snapshot.name}` : "No connected machine"}</p></div>${snapshot ? `<button class="panel-link" data-machine="${snapshot.id}">View machine →</button>` : ""}</header>
         <div class="panel-body">
-          <div class="sensor-row">${sensorMini("Flow", snapshot ? fmt(snapshot.flow) : "—", "L/min")}${sensorMini("Pressure", snapshot ? fmt(snapshot.pressure) : "—", "bar")}${sensorMini("Suction", snapshot ? fmt(snapshot.suction) : "—", "bar")}${sensorMini("Temperature", snapshot ? fmt(snapshot.temp) : "—", "°C")}</div>
+          <div class="sensor-row">${sensorMini("Flow", snapshot ? fmt(snapshot.flow) : "—", "L/min")}${sensorMini("Pressure", snapshot ? fmt(snapshot.pressure) : "—", "bar")}${sensorMini("Suction", snapshot ? fmt(snapshot.suction) : "—", "kPa")}</div>
           <div class="chart-toolbar"><div class="chart-legend"><i class="legend-line"></i>Pressure · ${snapshot?.id || "—"}</div><div class="segment-control"><button>15m</button><button class="active">1h</button><button>6h</button><button>24h</button></div></div>
           <div class="chart">${chartSvg("Pressure", snapshotHistory)}</div>
         </div>
@@ -642,7 +674,7 @@ function dashboardPage() {
     </section>
     <section class="panel">
       <header class="panel-head"><div class="panel-title"><h2>Recent alarms & events</h2><p>Latest operating exceptions from all machines</p></div><button class="panel-link" data-page="alarms">Open alarm centre →</button></header>
-      <div class="alarm-list">${alarmItems}</div>
+      <div class="alarm-list">${alarmItems || `<div class="empty-state">${icon("check")}No live alarms received.</div>`}</div>
     </section>`;
 }
 
@@ -659,13 +691,13 @@ function machinesPage() {
   const filters = ["All", "Running", "Stopped", "Alarm", "Offline"].map(filter => `<button class="filter-pill ${state.machineFilter === filter ? "active" : ""}" data-filter="${filter}">${filter}${filter === "All" ? ` · ${machines.length}` : ""}</button>`).join("");
   const rows = filtered.map((machine, index) => `<tr class="clickable" data-machine="${machine.id}">
     <td><div class="machine-cell"><span class="machine-num">${String(machines.indexOf(machine) + 1).padStart(2, "0")}</span><span><strong>${machine.id}</strong><small>${machine.zone}</small></span></div></td>
-    <td>${statusPill(machine.status)}</td><td>${fmt(machine.pressure, "bar")}</td><td>${fmt(machine.temp, "°C")}</td><td>${machine.updated}</td>
+    <td>${statusPill(machine.status)}</td><td>${fmt(machine.pressure, "bar")}</td><td>${fmt(machine.flow, "L/min")}</td><td>${fmt(machine.suction, "kPa")}</td><td>${machine.updated}</td>
     <td><div class="health-score"><div class="health-bar"><span style="width:${machine.health}%"></span></div><small>${machine.health ? `${machine.health}%` : "—"}</small></div></td>
     <td><button class="row-action" data-machine="${machine.id}">View details</button></td>
   </tr>`).join("");
   return `${pageHead("Machines", `Monitor and compare ${machines.length} connected compressor systems`, `<button class="secondary-btn" id="export-machines">${icon("download")} Export list</button>`)}
     <div class="filter-bar"><div class="search-wrap">${icon("search")}<input id="machine-search" type="search" value="${state.machineSearch}" placeholder="Search ID, name or area…"></div><div class="filter-pills">${filters}</div></div>
-    <section class="panel"><div class="table-wrap"><table class="data-table"><thead><tr><th>Machine</th><th>Status</th><th>Pressure</th><th>Temperature</th><th>Last update</th><th>Health</th><th>Action</th></tr></thead><tbody>${rows || `<tr><td colspan="7"><div class="empty-state">${icon("search")}No machines match this filter.</div></td></tr>`}</tbody></table></div></section>`;
+    <section class="panel"><div class="table-wrap"><table class="data-table"><thead><tr><th>Machine</th><th>Status</th><th>Pressure</th><th>Flow</th><th>Suction</th><th>Last update</th><th>Health</th><th>Action</th></tr></thead><tbody>${rows || `<tr><td colspan="8"><div class="empty-state">${icon("search")}No machines match this filter.</div></td></tr>`}</tbody></table></div></section>`;
 }
 
 function machineDetailPage() {
@@ -681,8 +713,10 @@ function machineDetailPage() {
     <section class="sensor-card-grid">
       ${sensorCard("Flow", value("flow", "L/min"), "Normal range 22–28 L/min")}
       ${sensorCard("Pressure", value("pressure", "bar"), "Target range 6.8–7.5 bar")}
-      ${sensorCard("Suction", value("suction", "bar"), "Normal range −1.0–−0.5 bar")}
-      ${sensorCard("Temperature", value("temp", "°C"), "Warning above 43 °C")}
+      ${sensorCard("Suction", value("suction", "kPa"), "Verified calibration range 0.6–1.8 kPa")}
+    </section>
+    <section class="panel diagnostics-panel"><header class="panel-head"><div class="panel-title"><h2>PLC diagnostics</h2><p>Raw Modbus registers and conversion traceability</p></div><span class="updated-note">${machine.source || "Waiting for gateway"}</span></header>
+      <div class="diagnostic-grid">${diagnosticValue("PV1 · Flow", machine.raw?.pv1, `ERR1 ${machine.errors?.flow ?? "—"}`, machine.quality?.flow)}${diagnosticValue("PV2 · Suction", machine.raw?.pv2, `ERR2 ${machine.errors?.suction ?? "—"}`, machine.quality?.suction)}${diagnosticValue("PV3 · Pressure", machine.raw?.pv3, `ERR3 ${machine.errors?.pressure ?? "—"}`, machine.quality?.pressure)}${diagnosticValue("Calibration", machine.calibrationVersion || "—", "1-second sampling", machine.quality?.modbus)}</div>
     </section>
     <section class="detail-grid">
       <article class="panel"><header class="panel-head"><div class="panel-title"><h2>Operating trend</h2><p>Pressure · last 60 minutes</p></div><div class="segment-control"><button>15m</button><button class="active">1h</button><button>6h</button><button>24h</button></div></header><div class="panel-body"><div class="chart tall">${chartSvg("Pressure", pressureHistory)}</div></div></article>
@@ -698,6 +732,11 @@ function sensorCard(label, value, range) {
   return `<article class="sensor-card"><div class="sensor-card-top"><span class="sensor-card-label">${label}</span><span class="live-tag"><i class="live-dot"></i> LIVE</span></div><div class="sensor-card-value">${value}</div><div class="sensor-range">${range}</div></article>`;
 }
 
+function diagnosticValue(label, value, detail, quality) {
+  const normalized = quality || "unknown";
+  return `<div class="diagnostic-value"><span>${label}</span><strong>${value ?? "—"}</strong><small>${detail} · <b class="quality-${normalized}">${normalized}</b></small></div>`;
+}
+
 function trendsPage() {
   const machine = machines.find(item => item.id === state.trendMachine) || machines[0];
   if (!machine) return `${pageHead("Trends & analytics", "No machine telemetry is available")}<div class="empty-state">${icon("trend")}Publish telemetry to begin charting.</div>`;
@@ -709,7 +748,7 @@ function trendsPage() {
   const average = values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
   const unit = (parameterConfig[state.trendParameter] || parameterConfig.Pressure).unit;
   const selects = machines.map(m => `<option value="${m.id}" ${m.id === state.trendMachine ? "selected" : ""}>${m.id} · ${m.name}</option>`).join("");
-  const parameters = ["Pressure", "Flow", "Suction", "Temperature"].map(parameter => `<option value="${parameter}" ${parameter === state.trendParameter ? "selected" : ""}>${parameter}</option>`).join("");
+  const parameters = ["Pressure", "Flow", "Suction"].map(parameter => `<option value="${parameter}" ${parameter === state.trendParameter ? "selected" : ""}>${parameter}</option>`).join("");
   const ranges = ["15m", "1h", "6h", "24h", "7d", "Custom"].map(range => `<button class="${state.trendRange === range ? "active" : ""}" data-range="${range}">${range}</button>`).join("");
   return `${pageHead("Trends & analytics", "Explore live and historical operating parameters", `<button class="secondary-btn" id="export-trend-pdf">${icon("report")} PDF</button><button class="secondary-btn" id="export-trend-xlsx">${icon("download")} Excel</button>`)}
     <section class="trend-controls"><div class="control-group grow"><label>Machine</label><div class="select-wrap"><select id="trend-machine">${selects}</select>${icon("chevronDown")}</div></div><div class="control-group"><label>Parameter</label><div class="select-wrap"><select id="trend-parameter">${parameters}</select>${icon("chevronDown")}</div></div><div class="control-group grow"><label>Time range</label><div class="range-pills">${ranges}</div></div></section>
@@ -727,10 +766,12 @@ function alarmsPage() {
   const filters = ["All", "Critical", "Warning", "Info", "Resolved"].map(filter => `<button class="filter-pill ${state.alarmFilter === filter ? "active" : ""}" data-alarm-filter="${filter}">${filter}</button>`).join("");
   const visible = alarms.filter(alarm => state.alarmFilter === "All" || (state.alarmFilter === "Resolved" ? alarm.status === "Resolved" : alarm.severity === state.alarmFilter));
   const rows = visible.map(alarm => `<tr><td><strong>${alarm.time}</strong><br><small>${alarm.date}</small></td><td><strong>${alarm.machine}</strong></td><td>${alarm.parameter}</td><td>${alarm.value}</td><td>${statusPill(alarm.severity)}</td><td>${statusPill(alarm.status)}</td><td><div class="table-actions"><button class="mini-action" data-view-alarm="${alarm.id}">View</button><button class="mini-action" data-ack="${alarm.id}" ${alarm.status !== "Active" ? "disabled" : ""}>Acknowledge</button><button class="mini-action" data-resolve="${alarm.id}" ${alarm.status === "Resolved" ? "disabled" : ""}>Resolve</button></div></td></tr>`).join("");
+  const count = (severity, status = "Active") => alarms.filter(alarm => alarm.severity === severity && alarm.status === status).length;
+  const resolved = alarms.filter(alarm => alarm.status === "Resolved").length;
   return `${pageHead("Alarms & events", "Review, acknowledge and resolve plant operating exceptions", `<button class="secondary-btn" id="export-alarms">${icon("download")} Export history</button>`)}
-    <section class="alarm-summary">${alarmSummary("Critical", 2, "alarm", "critical")}${alarmSummary("Warning", 5, "alarm", "warning")}${alarmSummary("Information", 12, "info", "info")}${alarmSummary("Resolved", 48, "check", "info")}</section>
+    <section class="alarm-summary">${alarmSummary("Critical", count("Critical"), "alarm", "critical")}${alarmSummary("Warning", count("Warning"), "alarm", "warning")}${alarmSummary("Information", count("Info"), "info", "info")}${alarmSummary("Resolved", resolved, "check", "info")}</section>
     <div class="filter-bar"><div class="filter-pills">${filters}</div><button class="secondary-btn">${icon("filter")} More filters</button></div>
-    <section class="panel"><div class="table-wrap"><table class="data-table"><thead><tr><th>Time</th><th>Machine</th><th>Parameter</th><th>Value</th><th>Severity</th><th>Status</th><th>Action</th></tr></thead><tbody>${rows}</tbody></table></div></section>`;
+    <section class="panel"><div class="table-wrap"><table class="data-table"><thead><tr><th>Time</th><th>Machine</th><th>Parameter</th><th>Value</th><th>Severity</th><th>Status</th><th>Action</th></tr></thead><tbody>${rows || `<tr><td colspan="7"><div class="empty-state">${icon("check")}No live alarms received.</div></td></tr>`}</tbody></table></div></section>`;
 }
 
 function alarmSummary(label, count, iconName, tone) {
@@ -905,6 +946,10 @@ function bindPageEvents() {
   document.querySelectorAll(".toggle").forEach(button => button.addEventListener("click", () => button.classList.toggle("on")));
   document.querySelector("#save-settings")?.addEventListener("click", () => showToast("Interface preferences saved for review."));
   document.querySelector("#refresh-users")?.addEventListener("click", () => loadManagedUsers());
+  document.querySelector("#refresh-live-data")?.addEventListener("click", () => {
+    const machineId = machines.find(machine => machine.id === "CAMS-01")?.id;
+    if (machineId) loadMachineHistory(machineId, "24h").catch(error => showToast(error.message));
+  });
   document.querySelector("#create-user-form")?.addEventListener("submit", async event => {
     event.preventDefault();
     const form = event.currentTarget;
@@ -959,6 +1004,10 @@ function navigate(page) {
   renderApp();
   if (page === "trends" && state.trendMachine) {
     loadMachineHistory(state.trendMachine, state.trendRange).catch(error => showToast(error.message));
+  }
+  if (page === "live-data") {
+    const machineId = machines.find(machine => machine.id === "CAMS-01")?.id;
+    if (machineId) loadMachineHistory(machineId, "24h").catch(error => showToast(error.message));
   }
   if (page === "users") loadManagedUsers().catch(error => showToast(error.message));
   window.scrollTo({ top: 0, behavior: "smooth" });
