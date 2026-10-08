@@ -12,8 +12,7 @@ const machineColumns = [
   { key: "status", label: "Status", width: 12 },
   { key: "pressureBar", label: "Pressure (bar)", width: 16 },
   { key: "flowLpm", label: "Flow (L/min)", width: 16 },
-  { key: "suctionBar", label: "Suction (bar)", width: 16 },
-  { key: "temperatureC", label: "Temperature (°C)", width: 18 },
+  { key: "suctionKpa", label: "Suction (kPa)", width: 16 },
   { key: "receivedAt", label: "Last received", width: 24 }
 ];
 
@@ -23,8 +22,13 @@ const telemetryColumns = [
   { key: "status", label: "Status", width: 12 },
   { key: "pressureBar", label: "Pressure (bar)", width: 16 },
   { key: "flowLpm", label: "Flow (L/min)", width: 16 },
-  { key: "suctionBar", label: "Suction (bar)", width: 16 },
-  { key: "temperatureC", label: "Temperature (°C)", width: 18 }
+  { key: "suctionKpa", label: "Suction (kPa)", width: 16 },
+  { key: "pv1", label: "Raw PV1", width: 14 },
+  { key: "pv2", label: "Raw PV2", width: 14 },
+  { key: "pv3", label: "Raw PV3", width: 14 },
+  { key: "err1", label: "ERR1", width: 12 },
+  { key: "err2", label: "ERR2", width: 12 },
+  { key: "err3", label: "ERR3", width: 12 }
 ];
 
 function iso(value) {
@@ -72,8 +76,7 @@ export function exportsRouter() {
           status: reading?.status || machine.status || "offline",
           pressureBar: reading?.metrics?.pressureBar ?? "",
           flowLpm: reading?.metrics?.flowLpm ?? "",
-          suctionBar: reading?.metrics?.suctionBar ?? "",
-          temperatureC: reading?.metrics?.temperatureC ?? "",
+          suctionKpa: reading?.metrics?.suctionKpa ?? "",
           receivedAt: iso(reading?.receivedAt || machine.lastSeenAt)
         };
       });
@@ -95,7 +98,7 @@ export function exportsRouter() {
       const format = request.params.format;
       if (!["xlsx", "pdf"].includes(format)) return response.status(404).json({ error: "Unsupported export format." });
       const machineId = String(request.query.machineId || "");
-      const siteId = String(request.query.siteId || "demo");
+      const siteId = String(request.query.siteId || "plant-01");
       if (!IDENTIFIER.test(machineId) || !IDENTIFIER.test(siteId)) return response.status(400).json({ error: "Invalid machine identifier." });
       const from = request.query.from ? new Date(String(request.query.from)) : new Date(Date.now() - 60 * 60 * 1000);
       const to = request.query.to ? new Date(String(request.query.to)) : new Date();
@@ -111,8 +114,13 @@ export function exportsRouter() {
         status: reading.status,
         pressureBar: reading.metrics.pressureBar,
         flowLpm: reading.metrics.flowLpm,
-        suctionBar: reading.metrics.suctionBar,
-        temperatureC: reading.metrics.temperatureC
+        suctionKpa: reading.metrics.suctionKpa,
+        pv1: reading.raw?.pv1 ?? "",
+        pv2: reading.raw?.pv2 ?? "",
+        pv3: reading.raw?.pv3 ?? "",
+        err1: reading.errors?.flow ?? "",
+        err2: reading.errors?.suction ?? "",
+        err3: reading.errors?.pressure ?? ""
       }));
       const buffer = await buildDocument(format, {
         sheetName: machineId,

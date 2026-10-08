@@ -1,4 +1,5 @@
 import "dotenv/config";
+import path from "node:path";
 
 function integer(name, fallback, minimum = 1) {
   const value = Number.parseInt(process.env[name] || String(fallback), 10);
@@ -59,7 +60,7 @@ export function loadConfig() {
     environment: process.env.NODE_ENV || "development",
     production,
     serveWeb,
-    webRoot: process.env.WEB_ROOT?.trim() || "/app/public",
+    webRoot: path.resolve(process.env.WEB_ROOT?.trim() || "/app/public"),
     port: integer("PORT", 3000),
     mongoUri,
     mongoDb: process.env.MONGODB_DB?.trim() || "cams",
@@ -71,7 +72,7 @@ export function loadConfig() {
     },
     sessionHours: integer("SESSION_HOURS", 8),
     rememberedSessionDays: integer("REMEMBER_SESSION_DAYS", 7),
-    telemetryRetentionDays: integer("TELEMETRY_RETENTION_DAYS", 90),
+    telemetryRetentionDays: integer("TELEMETRY_RETENTION_DAYS", 7),
     mqtt: {
       enabled: mqttEnabled,
       url: mqttUrl,
