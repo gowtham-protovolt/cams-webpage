@@ -3,12 +3,21 @@ services:
     image: mongo:7.0.43
     container_name: CAMS-MongoDB
     restart: unless-stopped
+    command: ["mongod", "--auth", "--bind_ip_all"]
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_INITDB_ROOT_USERNAME:?Set MONGO_INITDB_ROOT_USERNAME in cams-api/.env}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_INITDB_ROOT_PASSWORD:?Set MONGO_INITDB_ROOT_PASSWORD in cams-api/.env}
+      MONGO_INITDB_DATABASE: ${MONGODB_DB:-cams_local}
+      MONGODB_APP_USERNAME: ${MONGODB_APP_USERNAME:?Set MONGODB_APP_USERNAME in cams-api/.env}
+      MONGODB_APP_PASSWORD: ${MONGODB_APP_PASSWORD:?Set MONGODB_APP_PASSWORD in cams-api/.env}
     ports:
       - "127.0.0.1:27018:27017"
     volumes:
       - cams-mongodb-data:/data/db
+      - cams-mongodb-config:/data/configdb
+      - ./docker/mongo-init/01-create-cams-user.sh:/docker-entrypoint-initdb.d/01-create-cams-user.sh:ro
     healthcheck:
-      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      test: ["CMD-SHELL", "mongosh --quiet --username \"$$MONGO_INITDB_ROOT_USERNAME\" --password \"$$MONGO_INITDB_ROOT_PASSWORD\" --authenticationDatabase admin --eval \"db.adminCommand('ping').ok\""]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -68,8 +77,8 @@ services:
       PORT: 3000
       SERVE_WEB: "true"
       WEB_ROOT: /app/public
-      MONGODB_URI: mongodb://mongodb:27017
-      MONGODB_DB: cams_local
+      MONGODB_URI: mongodb://${MONGODB_APP_USERNAME:?Set MONGODB_APP_USERNAME in cams-api/.env}:${MONGODB_APP_PASSWORD:?Set MONGODB_APP_PASSWORD in cams-api/.env}@mongodb:27017/${MONGODB_DB:-cams_local}?authSource=${MONGODB_DB:-cams_local}
+      MONGODB_DB: ${MONGODB_DB:-cams_local}
       CORS_ORIGINS: http://localhost:3100,http://127.0.0.1:3100
       COOKIE_NAME: cams_session
       COOKIE_SECURE: "false"
@@ -86,5 +95,6 @@ services:
 
 volumes:
   cams-mongodb-data:
+  cams-mongodb-config:
   cams-mqtt-secrets:
   cams-mqtt-data:
