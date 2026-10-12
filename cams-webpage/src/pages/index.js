@@ -1,0 +1,12 @@
+export { renderAlarmsPage } from "./alarms.js";
+export { renderDashboardPage } from "./dashboard.js";
+export { renderEnergyPage } from "./energy.js";
+export { renderLiveDataPage } from "./live-data.js";
+export { renderLoginPage, renderPasswordRequestPage, renderPasswordResetPage } from "./login.js";
+export { renderMachineDetailPage } from "./machine-detail.js";
+export { renderMachinesPage } from "./machines.js";
+export { renderMaintenancePage } from "./maintenance.js";
+export { renderReportsPage } from "./reports.js";
+export { renderSettingsPage } from "./settings.js";
+export { renderTrendsPage } from "./trends.js";
+export { renderUsersPage } from "./users.js";

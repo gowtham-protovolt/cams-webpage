@@ -1,3 +1,20 @@
+import {
+  renderAlarmsPage,
+  renderDashboardPage,
+  renderEnergyPage,
+  renderLiveDataPage,
+  renderLoginPage,
+  renderPasswordRequestPage,
+  renderPasswordResetPage,
+  renderMachineDetailPage,
+  renderMachinesPage,
+  renderMaintenancePage,
+  renderReportsPage,
+  renderSettingsPage,
+  renderTrendsPage,
+  renderUsersPage
+} from "./src/pages/index.js";
+
 const app = document.querySelector("#app");
 const toastRegion = document.querySelector("#toast-region");
 
@@ -49,6 +66,12 @@ const authApi = {
   async signOut() {
     await this.request("/api/auth/logout", { method: "POST", body: "{}" });
   },
+  async requestPasswordReset(identity) {
+    return this.request("/api/auth/forgot-password", { method: "POST", body: JSON.stringify({ identity }) });
+  },
+  async resetPassword(token, password) {
+    return this.request("/api/auth/reset-password", { method: "POST", body: JSON.stringify({ token, password }) });
+  },
   async listUsers() {
     return this.request("/api/admin/users");
   },
@@ -59,6 +82,27 @@ const authApi = {
     return this.request(`/api/admin/users/${encodeURIComponent(userId)}/status`, {
       method: "PATCH",
       body: JSON.stringify({ active })
+    });
+  },
+  async createMachine(machine) {
+    return this.request("/api/machines", { method: "POST", body: JSON.stringify(machine) });
+  },
+  async updateMachine(machineId, siteId, machine) {
+    return this.request(`/api/machines/${encodeURIComponent(machineId)}?siteId=${encodeURIComponent(siteId)}`, {
+      method: "PATCH",
+      body: JSON.stringify(machine)
+    });
+  },
+  async removeMachine(machineId, siteId) {
+    return this.request(`/api/machines/${encodeURIComponent(machineId)}?siteId=${encodeURIComponent(siteId)}`, { method: "DELETE" });
+  },
+  async listRemovedMachines(siteId = "plant-01") {
+    return this.request(`/api/machines/removed?siteId=${encodeURIComponent(siteId)}`);
+  },
+  async restoreMachine(machineId, siteId) {
+    return this.request(`/api/machines/${encodeURIComponent(machineId)}/restore?siteId=${encodeURIComponent(siteId)}`, {
+      method: "POST",
+      body: "{}"
     });
   },
   async download(path) {
@@ -122,20 +166,39 @@ let machines = [];
 const machineHistory = new Map();
 let telemetryStream = null;
 let telemetryRenderTimer = null;
+let liveSyncTimer = null;
+let liveSyncInFlight = false;
 
 let alarms = [];
 
+const savedMachineId = window.sessionStorage.getItem("cams.machineId");
+const savedTrendParameter = window.sessionStorage.getItem("cams.trendParameter");
+const savedDashboardParameter = window.sessionStorage.getItem("cams.dashboardParameter");
+const savedDashboardRange = window.sessionStorage.getItem("cams.dashboardRange");
+const savedDetailParameter = window.sessionStorage.getItem("cams.detailParameter");
+const resetTokenFromUrl = new URLSearchParams(window.location.search).get("resetToken") || "";
+
 const state = {
   authenticated: false,
+  authView: resetTokenFromUrl ? "reset" : "login",
+  passwordResetToken: resetTokenFromUrl,
+  passwordResetIdentity: "",
+  passwordResetSent: false,
+  passwordResetUrl: "",
+  passwordResetError: "",
   currentUser: null,
   page: "dashboard",
-  machineId: "CAMS-01",
+  machineId: savedMachineId || "CAMS-01",
   machineFilter: "All",
   machineSearch: "",
   alarmFilter: "All",
   trendMachine: "CAMS-01",
-  trendParameter: "Pressure",
+  trendParameter: ["Pressure", "Flow", "Suction"].includes(savedTrendParameter) ? savedTrendParameter : "Pressure",
   trendRange: "1h",
+  dashboardParameter: ["Pressure", "Flow", "Suction"].includes(savedDashboardParameter) ? savedDashboardParameter : "Pressure",
+  dashboardRange: ["15m", "1h", "6h", "24h"].includes(savedDashboardRange) ? savedDashboardRange : "1h",
+  detailParameter: ["Pressure", "Flow", "Suction"].includes(savedDetailParameter) ? savedDetailParameter : "Pressure",
+  detailRange: "1h",
   reportMachine: "CAMS-01",
   reportRange: "24h",
   mobileOpen: false,
@@ -145,7 +208,18 @@ const state = {
   lastTelemetryAt: null,
   managedUsers: [],
   usersLoading: false,
-  usersError: ""
+  usersError: "",
+  settings: null,
+  settingsSaving: false,
+  settingsError: "",
+  machineModal: null,
+  removedMachines: [],
+  removedMachinesLoading: false,
+  machineManagementError: "",
+  alarmModal: null,
+  alarmHistory: [],
+  alarmHistoryLoading: false,
+  alarmAuditError: ""
 };
 
 const navItems = [
@@ -211,22 +285,11 @@ function relativeTime(value) {
   return new Date(value).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
 }
 
-function healthScore(status, metrics) {
-  if (status === "Offline") return 0;
-  if (status === "Stopped") return 85;
-  if (status === "Alarm") return 65;
-  if (!metrics) return 0;
-  let score = 100;
-  if (metrics.pressureBar < 6.8 || metrics.pressureBar > 7.5) score -= 12;
-  if (metrics.flowLpm < 22 || metrics.flowLpm > 28) score -= 8;
-  if (metrics.suctionKpa < 0.6 || metrics.suctionKpa > 1.8) score -= 8;
-  return Math.max(0, score);
-}
-
 function mapMachine(item) {
   const telemetry = item.telemetry || null;
   const metrics = telemetry?.metrics || null;
-  const status = displayStatus(telemetry?.status || item.status);
+  const monitoring = telemetry?.monitoring || item.monitoring || {};
+  const status = displayStatus(monitoring.status || telemetry?.status || item.status);
   const receivedAt = telemetry?.receivedAt || item.lastSeenAt || null;
   return {
     id: item.id,
@@ -242,7 +305,12 @@ function mapMachine(item) {
     quality: telemetry?.quality || null,
     calibrationVersion: telemetry?.calibrationVersion || null,
     source: telemetry?.source || null,
-    health: healthScore(status, metrics),
+    monitoring,
+    health: Number.isFinite(monitoring.health) ? monitoring.health : 0,
+    gatewayStatus: displayStatus(monitoring.gatewayStatus || "offline"),
+    plcStatus: displayStatus(monitoring.plcStatus || "offline"),
+    communicationPercent: Number.isFinite(monitoring.communicationPercent) ? monitoring.communicationPercent : 0,
+    reasons: monitoring.reasons || [],
     updated: relativeTime(receivedAt),
     receivedAt,
     hours: null
@@ -263,7 +331,35 @@ function normalizeReading(payload) {
     quality: payload.quality || null,
     calibrationVersion: payload.calibrationVersion || null,
     source: payload.source || null
+    ,monitoring: payload.monitoring || null
   };
+}
+
+function mapAlarm(item) {
+  const occurredAt = item.lastSeenAt || item.firstSeenAt;
+  const date = occurredAt ? new Date(occurredAt) : new Date();
+  return {
+    id: item.id,
+    siteId: item.siteId,
+    machine: item.machineId,
+    parameter: item.parameter,
+    severity: item.severity,
+    value: String(item.value ?? "—"),
+    message: item.message,
+    status: item.status,
+    date: date.toLocaleDateString("en-IN"),
+    time: date.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
+    firstSeenAt: item.firstSeenAt,
+    lastSeenAt: item.lastSeenAt,
+    acknowledgedAt: item.acknowledgedAt,
+    resolvedAt: item.resolvedAt
+  };
+}
+
+async function loadAlarms({ render = true } = {}) {
+  const payload = await authApi.request("/api/alarms");
+  alarms = (payload.alarms || []).map(mapAlarm);
+  if (render) renderApp();
 }
 
 function appendHistory(payload) {
@@ -291,6 +387,94 @@ async function loadMachines({ render = true } = {}) {
   if (!machines.some(machine => machine.id === state.trendMachine) && machines[0]) state.trendMachine = machines[0].id;
   if (!machines.some(machine => machine.id === state.reportMachine) && machines[0]) state.reportMachine = machines[0].id;
   if (render) renderApp();
+}
+
+function openMachineModal(type, machine = null) {
+  if (!state.currentUser?.isOwner) return;
+  state.machineManagementError = "";
+  state.machineModal = { type, machine };
+  renderApp();
+}
+
+function closeMachineModal() {
+  state.machineModal = null;
+  state.machineManagementError = "";
+  renderApp();
+}
+
+async function loadRemovedMachines({ render = true } = {}) {
+  if (!state.currentUser?.isOwner) return;
+  state.removedMachinesLoading = true;
+  state.machineManagementError = "";
+  if (render) renderApp();
+  try {
+    const siteId = state.settings?.siteId || "plant-01";
+    const payload = await authApi.listRemovedMachines(siteId);
+    state.removedMachines = payload.machines || [];
+  } catch (error) {
+    state.machineManagementError = error.message;
+  } finally {
+    state.removedMachinesLoading = false;
+    if (render) renderApp();
+  }
+}
+
+async function saveMachine(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const submit = document.querySelector('[type="submit"][form="machine-form"]');
+  const data = Object.fromEntries(new FormData(form));
+  data.machineId = String(data.machineId || "").trim().toUpperCase();
+  submit.disabled = true;
+  state.machineManagementError = "";
+  try {
+    if (state.machineModal.type === "edit") {
+      await authApi.updateMachine(data.machineId, data.siteId, { name: data.name, zone: data.zone });
+      showToast(`${data.machineId} details updated.`);
+    } else {
+      await authApi.createMachine(data);
+      showToast(`${data.machineId} registered. Waiting for MQTT telemetry.`);
+    }
+    state.machineModal = null;
+    await loadMachines({ render: false });
+    renderApp();
+  } catch (error) {
+    state.machineManagementError = error.message;
+    renderApp();
+  }
+}
+
+async function removeSelectedMachine() {
+  const machine = state.machineModal?.machine;
+  if (!machine) return;
+  const button = document.querySelector("#confirm-machine-delete");
+  button.disabled = true;
+  state.machineManagementError = "";
+  try {
+    await authApi.removeMachine(machine.id, machine.siteId);
+    machineHistory.delete(machine.id);
+    state.machineModal = null;
+    await loadMachines({ render: false });
+    renderApp();
+    showToast(`${machine.id} removed. Historical telemetry was preserved.`);
+  } catch (error) {
+    state.machineManagementError = error.message;
+    renderApp();
+  }
+}
+
+async function restoreRemovedMachine(machineId, siteId, button) {
+  button.disabled = true;
+  state.machineManagementError = "";
+  try {
+    await authApi.restoreMachine(machineId, siteId);
+    await Promise.all([loadMachines({ render: false }), loadRemovedMachines({ render: false })]);
+    renderApp();
+    showToast(`${machineId} restored. Waiting for new MQTT telemetry.`);
+  } catch (error) {
+    state.machineManagementError = error.message;
+    renderApp();
+  }
 }
 
 function historyRangeMilliseconds(range) {
@@ -331,11 +515,38 @@ function applyTelemetry(payload) {
   scheduleTelemetryRender();
 }
 
+function applyMachineStatus(payload) {
+  const index = machines.findIndex(machine => machine.id === payload.machineId && machine.siteId === payload.siteId);
+  if (index < 0) return loadMachines().catch(() => {});
+  machines[index] = {
+    ...machines[index],
+    status: displayStatus(payload.status),
+    health: payload.health,
+    gatewayStatus: displayStatus(payload.gatewayStatus),
+    plcStatus: displayStatus(payload.plcStatus),
+    communicationPercent: payload.communicationPercent,
+    reasons: payload.reasons || [],
+    monitoring: payload
+  };
+  scheduleTelemetryRender();
+}
+
+function applyAlarm(payload) {
+  const mapped = mapAlarm(payload);
+  const index = alarms.findIndex(alarm => alarm.id === mapped.id);
+  const shouldNotify = index < 0 && mapped.status === "Active" && state.settings?.notifications?.browserEnabled &&
+    state.settings.notifications[mapped.severity.toLowerCase()] && window.Notification?.permission === "granted";
+  if (index >= 0) alarms[index] = mapped;
+  else alarms.unshift(mapped);
+  if (shouldNotify) new Notification(`${mapped.severity} · ${mapped.machine}`, { body: `${mapped.parameter}: ${mapped.message}`, tag: `cams-${mapped.id}` });
+  scheduleTelemetryRender();
+}
+
 function scheduleTelemetryRender() {
   if (telemetryRenderTimer || !state.authenticated) return;
   telemetryRenderTimer = window.setTimeout(() => {
     telemetryRenderTimer = null;
-    if (document.activeElement?.id !== "machine-search") renderApp();
+    if (!document.activeElement?.matches("input, select, textarea")) renderApp();
   }, 250);
 }
 
@@ -345,6 +556,58 @@ function closeTelemetryStream() {
   state.telemetryConnected = false;
   if (telemetryRenderTimer) window.clearTimeout(telemetryRenderTimer);
   telemetryRenderTimer = null;
+}
+
+function stopLiveSync() {
+  if (liveSyncTimer) window.clearInterval(liveSyncTimer);
+  liveSyncTimer = null;
+  liveSyncInFlight = false;
+}
+
+function machineSnapshotKey() {
+  return machines.map(machine => [
+    machine.siteId,
+    machine.id,
+    machine.receivedAt,
+    machine.status,
+    machine.health,
+    machine.pressure,
+    machine.flow,
+    machine.suction
+  ].join("|")).join(";");
+}
+
+async function syncLiveSnapshot() {
+  if (!state.authenticated || liveSyncInFlight || document.hidden) return;
+  liveSyncInFlight = true;
+  try {
+    const previousSnapshot = machineSnapshotKey();
+    await loadMachines({ render: false });
+    const telemetryChanged = previousSnapshot !== machineSnapshotKey();
+    const livePages = new Set(["dashboard", "live-data", "machines", "machine-detail", "trends", "alarms"]);
+    if (telemetryChanged && livePages.has(state.page) && !document.activeElement?.matches("input, select, textarea")) renderApp();
+  } catch {
+    // The event stream can continue updating the UI while a recovery poll fails.
+  } finally {
+    liveSyncInFlight = false;
+  }
+}
+
+function startLiveSync() {
+  stopLiveSync();
+  const interval = Math.max(1, Number(state.settings?.sampling?.intervalSeconds || 1)) * 1000;
+  liveSyncTimer = window.setInterval(syncLiveSnapshot, interval);
+}
+
+async function loadSettings({ render = true } = {}) {
+  try {
+    const payload = await authApi.request("/api/settings");
+    state.settings = payload.settings;
+    state.settingsError = "";
+  } catch (error) {
+    state.settingsError = error.message;
+  }
+  if (render) renderApp();
 }
 
 function connectTelemetryStream() {
@@ -363,6 +626,18 @@ function connectTelemetryStream() {
       // Ignore a malformed event while keeping the stream open for the next valid reading.
     }
   });
+  telemetryStream.addEventListener("machine-status", event => {
+    try { applyMachineStatus(JSON.parse(event.data)); } catch { /* Wait for the next status event. */ }
+  });
+  telemetryStream.addEventListener("alarm", event => {
+    try { applyAlarm(JSON.parse(event.data)); } catch { /* Wait for the next alarm event. */ }
+  });
+  for (const eventName of ["machine-created", "machine-updated", "machine-removed", "machine-restored"]) {
+    telemetryStream.addEventListener(eventName, () => {
+      loadMachines().catch(() => {});
+      if (state.machineModal?.type === "removed") loadRemovedMachines({ render: false }).catch(() => {});
+    });
+  }
   telemetryStream.onerror = () => {
     state.telemetryConnected = false;
     scheduleTelemetryRender();
@@ -372,12 +647,19 @@ function connectTelemetryStream() {
 async function enterApplication(user) {
   state.authenticated = true;
   state.currentUser = user;
+  // Connect first so telemetry published while the initial snapshot loads is not missed.
+  connectTelemetryStream();
+  await loadSettings({ render: false });
+  startLiveSync();
   await loadMachines({ render: false });
-  if (machines[0]) {
-    await loadMachineHistory(machines[0].id, "1h", { render: false }).catch(() => {});
+  await loadAlarms({ render: false });
+  const dashboardMachine = machines.find(machine => machine.id === state.machineId) || machines[0];
+  if (dashboardMachine) {
+    state.machineId = dashboardMachine.id;
+    window.sessionStorage.setItem("cams.machineId", state.machineId);
+    await loadMachineHistory(dashboardMachine.id, state.dashboardRange, { render: false }).catch(() => {});
   }
   renderApp();
-  connectTelemetryStream();
 }
 
 async function downloadExport(path) {
@@ -415,43 +697,25 @@ function bindDownload(buttonId, path) {
 }
 
 function renderLogin() {
-  app.innerHTML = `<main class="login-shell">
-    <section class="login-form-side">
-      ${brand()}
-      <div class="login-content">
-        <p class="login-kicker">Secure plant access</p>
-        <h1>Welcome back.</h1>
-        <p class="login-intro">Sign in to monitor compressor health, live parameters, trends and plant alarms.</p>
-        <form id="login-form" novalidate>
-          <div class="form-field">
-            <label for="username">Username or email</label>
-            <div class="input-wrap" id="username-wrap">${icon("user", "field-icon")}<input id="username" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" placeholder="Enter username"></div>
-            <p class="field-error" id="username-error"></p>
-          </div>
-          <div class="form-field">
-            <label for="password">Password</label>
-            <div class="input-wrap" id="password-wrap">${icon("lock", "field-icon")}<input id="password" name="password" type="password" autocomplete="current-password" placeholder="Enter password"><button class="password-toggle" id="password-toggle" type="button" aria-label="Show password">${icon("eye")}</button></div>
-            <p class="field-error" id="password-error"></p>
-          </div>
-          <div class="form-options">
-            <label class="checkbox"><input id="remember-me" type="checkbox" checked> Remember me</label>
-            <button class="text-link" id="forgot-password" type="button">Forgot password?</button>
-          </div>
-          <button class="primary-btn wide" id="login-button" type="submit"><span>Sign in to CAMS</span>${icon("chevronRight")}</button>
-          <div class="login-note">${icon("shield")} Protected industrial monitoring access</div>
-        </form>
-      </div>
-      <footer class="login-footer"><span>© 2026 CAMS</span><span>System version 1.0 · UI review</span></footer>
-    </section>
-    <aside class="login-visual" aria-label="CAMS overview">
-      <div class="powered-by"><span>Powered by</span><span class="owner-mark">E7</span></div>
-      <div class="visual-copy">
-        <h2>Clarity for every compressor.</h2>
-        <p>One operational view of pressure, flow and suction across your complete compressed air network.</p>
-      </div>
-      <div class="system-route"><span>Sensors</span><i class="route-dot"></i><span>PLC</span><i class="route-dot"></i><span>ESP32-S3</span><i class="route-dot"></i><span>MQTT</span><i class="route-dot"></i><b>CAMS</b></div>
-    </aside>
-  </main>`;
+  if (state.authView === "request") {
+    app.innerHTML = renderPasswordRequestPage(brand, state);
+    document.querySelector("#back-to-login")?.addEventListener("click", returnToLogin);
+    document.querySelector("#forgot-password-form")?.addEventListener("submit", handlePasswordResetRequest);
+    return;
+  }
+  if (state.authView === "reset") {
+    app.innerHTML = renderPasswordResetPage(brand, state);
+    document.querySelector("#back-to-login")?.addEventListener("click", returnToLogin);
+    document.querySelectorAll("[data-password-toggle]").forEach(button => button.addEventListener("click", () => {
+      const input = document.querySelector(`#${button.dataset.passwordToggle}`);
+      input.type = input.type === "password" ? "text" : "password";
+      button.innerHTML = icon(input.type === "password" ? "eye" : "eyeOff");
+      button.setAttribute("aria-label", input.type === "password" ? "Show password" : "Hide password");
+    }));
+    document.querySelector("#reset-password-form")?.addEventListener("submit", handlePasswordReset);
+    return;
+  }
+  app.innerHTML = renderLoginPage(brand);
 
   document.querySelector("#password-toggle").addEventListener("click", (event) => {
     const input = document.querySelector("#password");
@@ -461,19 +725,91 @@ function renderLogin() {
   });
   document.querySelector("#forgot-password").addEventListener("click", () => {
     const username = document.querySelector("#username");
-    const usernameError = document.querySelector("#username-error");
-    const usernameWrap = document.querySelector("#username-wrap");
-    if (!username.value.trim()) {
-      usernameError.textContent = "Enter your username or email first.";
-      usernameWrap.classList.add("invalid");
-      username.focus();
-      return;
-    }
-    usernameError.textContent = "";
-    usernameWrap.classList.remove("invalid");
-    showToast("Password recovery is not enabled yet. Contact the CAMS administrator.");
+    state.passwordResetIdentity = username.value.trim();
+    state.passwordResetSent = false;
+    state.passwordResetUrl = "";
+    state.passwordResetError = "";
+    state.authView = "request";
+    renderLogin();
+    document.querySelector("#reset-identity")?.focus();
   });
   document.querySelector("#login-form").addEventListener("submit", handleLogin);
+}
+
+function returnToLogin() {
+  state.authView = "login";
+  state.passwordResetToken = "";
+  state.passwordResetSent = false;
+  state.passwordResetUrl = "";
+  state.passwordResetError = "";
+  window.history.replaceState({}, "", `${window.location.pathname}${window.location.hash}`);
+  renderLogin();
+}
+
+async function handlePasswordResetRequest(event) {
+  event.preventDefault();
+  const identity = document.querySelector("#reset-identity");
+  const error = document.querySelector("#reset-identity-error");
+  const wrap = document.querySelector("#reset-identity-wrap");
+  const button = document.querySelector("#reset-request-button");
+  state.passwordResetIdentity = identity.value.trim();
+  error.textContent = "";
+  wrap.classList.remove("invalid");
+  if (!state.passwordResetIdentity) {
+    error.textContent = "Enter your username or email.";
+    wrap.classList.add("invalid");
+    identity.focus();
+    return;
+  }
+  button.disabled = true;
+  button.innerHTML = `<span class="loading-spinner"></span><span>Preparing reset…</span>`;
+  state.passwordResetError = "";
+  try {
+    const payload = await authApi.requestPasswordReset(state.passwordResetIdentity);
+    state.passwordResetSent = true;
+    state.passwordResetUrl = payload.resetUrl || "";
+  } catch (requestError) {
+    state.passwordResetError = requestError.message;
+  }
+  renderLogin();
+}
+
+async function handlePasswordReset(event) {
+  event.preventDefault();
+  const password = document.querySelector("#new-password");
+  const confirmation = document.querySelector("#confirm-password");
+  const passwordError = document.querySelector("#new-password-error");
+  const confirmationError = document.querySelector("#confirm-password-error");
+  const passwordWrap = document.querySelector("#new-password-wrap");
+  const confirmationWrap = document.querySelector("#confirm-password-wrap");
+  let valid = true;
+  passwordError.textContent = "";
+  confirmationError.textContent = "";
+  passwordWrap.classList.remove("invalid");
+  confirmationWrap.classList.remove("invalid");
+  if (password.value.length < 12 || password.value.length > 128) {
+    passwordError.textContent = "Use between 12 and 128 characters.";
+    passwordWrap.classList.add("invalid");
+    valid = false;
+  }
+  if (!confirmation.value || confirmation.value !== password.value) {
+    confirmationError.textContent = "Passwords do not match.";
+    confirmationWrap.classList.add("invalid");
+    valid = false;
+  }
+  if (!valid) return;
+  const button = document.querySelector("#reset-password-button");
+  button.disabled = true;
+  button.innerHTML = `<span class="loading-spinner"></span><span>Updating password…</span>`;
+  state.passwordResetError = "";
+  try {
+    const payload = await authApi.resetPassword(state.passwordResetToken, password.value);
+    returnToLogin();
+    showToast(payload.message || "Password updated. Sign in with your new password.");
+  } catch (resetError) {
+    state.passwordResetError = resetError.message;
+    renderLogin();
+  }
 }
 
 async function handleLogin(event) {
@@ -520,8 +856,12 @@ function renderApp() {
   const safeName = escapeHtml(user.displayName);
   const safeRole = escapeHtml(user.role);
   const groups = ["Monitor", "Manage", "Future"];
-  const connectionLabel = state.telemetryConnected ? "Live telemetry stream" : "Telemetry reconnecting";
-  const networkLabel = state.telemetryConnected ? "Plant network online" : "Waiting for live telemetry";
+  const staleAfterMs = Number(state.settings?.sampling?.staleAfterSeconds || 10) * 1000;
+  const freshGateways = machines.filter(machine => machine.gatewayStatus === "Online" && machine.receivedAt && Date.now() - new Date(machine.receivedAt).getTime() <= staleAfterMs).length;
+  const plantConnectionState = freshGateways ? "online" : "offline";
+  const connectionLabel = state.telemetryConnected ? "CAMS stream connected" : "CAMS stream reconnecting";
+  const networkLabel = freshGateways ? `${freshGateways} gateway${freshGateways === 1 ? "" : "s"} sending live data` : state.lastTelemetryAt ? `Last telemetry · ${relativeTime(state.lastTelemetryAt)}` : "No gateway telemetry";
+  const openAlarmCount = alarms.filter(alarm => alarm.status !== "Resolved").length;
   const sidebarNav = groups.map(group => `<div class="nav-group-label">${group}</div><nav class="nav-list">${navItems.filter(item => item.group === group && (!item.ownerOnly || user.isOwner)).map(item => `<button class="nav-item ${state.page === item.id || (state.page === "machine-detail" && item.id === "machines") ? "active" : ""}" data-page="${item.id}">${icon(item.icon)}<span>${item.label}</span>${item.future ? '<span class="future">P2</span>' : ""}</button>`).join("")}</nav>`).join("");
   app.innerHTML = `<div class="app-shell">
     ${state.mobileOpen ? '<button class="mobile-overlay" id="mobile-overlay" aria-label="Close menu"></button>' : ""}
@@ -531,10 +871,10 @@ function renderApp() {
       <div class="sidebar-foot"><div class="sidebar-foot-row"><i class="pulse-dot"></i><span>${connectionLabel}</span></div><div class="sidebar-foot-row"><span>MongoDB-backed monitoring</span></div></div>
     </aside>
     <header class="top-header">
-      <div class="header-plant"><button class="icon-btn mobile-menu" id="mobile-menu" aria-label="Open menu">${icon("menu")}</button><div><div class="plant-name">Demo Spinning Plant</div><div class="plant-meta"><i class="live-dot"></i><span>${networkLabel}</span></div></div></div>
+      <div class="header-plant"><button class="icon-btn mobile-menu" id="mobile-menu" aria-label="Open menu">${icon("menu")}</button><div><div class="plant-name">${escapeHtml(state.settings?.plant?.name || "Demo Spinning Plant")}</div><div class="plant-meta ${plantConnectionState}"><i class="live-dot"></i><span>${networkLabel}</span></div></div></div>
       <div class="header-right">
         <div class="clock"><strong id="header-time">--:--:--</strong><span id="header-date">--</span></div>
-        <button class="icon-btn notification-btn" id="notification-button" aria-label="Notifications">${icon("bell")}${alarms.filter(alarm => alarm.status === "Active").length ? `<span class="notification-badge">${alarms.filter(alarm => alarm.status === "Active").length}</span>` : ""}</button>
+        <button class="icon-btn notification-btn" id="notification-button" aria-label="Notifications">${icon("bell")}${openAlarmCount ? `<span class="notification-badge">${openAlarmCount}</span>` : ""}</button>
         <div class="account-control">
           <button class="user-menu" id="user-menu" aria-haspopup="menu" aria-expanded="${state.userMenuOpen}"><span class="avatar">${escapeHtml(initials(user.displayName))}</span><span class="user-copy"><strong>${safeName}</strong><span>${safeRole}</span></span>${icon("chevronDown")}</button>
           ${state.userMenuOpen ? `<div class="account-menu" role="menu"><div class="account-summary"><span class="avatar">${escapeHtml(initials(user.displayName))}</span><div><strong>${safeName}</strong><span>${escapeHtml(user.identity)}</span></div></div><div class="account-session">${icon("shield")}<span>Secure server session active</span></div><button id="sign-out" class="account-action" role="menuitem">${icon("logout")}<span>Sign out</span></button></div>` : ""}
@@ -549,305 +889,20 @@ function renderApp() {
 }
 
 function pageContent() {
+  const model = { state, machines, machineHistory, alarms };
   switch (state.page) {
-    case "live-data": return liveDataPage();
-    case "machines": return machinesPage();
-    case "machine-detail": return machineDetailPage();
-    case "trends": return trendsPage();
-    case "alarms": return alarmsPage();
-    case "maintenance": return phasePage("Maintenance", "P1 · Next phase", "Plan service before it becomes downtime.", "Maintenance workflows will connect compressor runtime, service intervals and technician records in one clear view.", [["calendar", "Service planner", "Upcoming and overdue schedules"], ["maintenance", "Work orders", "Assign, track and close maintenance tasks"], ["report", "Service history", "A complete audit trail for each machine"]]);
-    case "reports": return reportsPage();
-    case "users": return usersPage();
-    case "energy": return phasePage("Energy & Utilization", "P2 · Future module", "Measure the cost of every cubic metre.", "Energy metering and utilization intelligence will be introduced after the core monitoring workflow is approved.", [["energy", "Energy intensity", "kWh per unit of compressed air"], ["pulse", "Load profile", "Loaded, unloaded and idle time"], ["trend", "Opportunity tracking", "Identify efficiency and leakage improvements"]]);
-    case "settings": return settingsPage();
-    default: return dashboardPage();
+    case "live-data": return renderLiveDataPage(model);
+    case "machines": return renderMachinesPage(model);
+    case "machine-detail": return renderMachineDetailPage(model);
+    case "trends": return renderTrendsPage(model);
+    case "alarms": return renderAlarmsPage(model);
+    case "maintenance": return renderMaintenancePage(model);
+    case "reports": return renderReportsPage(model);
+    case "users": return renderUsersPage(model);
+    case "energy": return renderEnergyPage(model);
+    case "settings": return renderSettingsPage(model);
+    default: return renderDashboardPage(model);
   }
-}
-
-function liveDataPage() {
-  const machine = machines.find(item => item.id === "CAMS-01") || machines[0];
-  const readings = machine ? [...(machineHistory.get(machine.id) || [])].slice(-100).reverse() : [];
-  const byDate = new Map();
-  for (const reading of readings) {
-    const observed = new Date(reading.observedAt);
-    if (Number.isNaN(observed.getTime())) continue;
-    const date = observed.toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
-    if (!byDate.has(date)) byDate.set(date, []);
-    byDate.get(date).push({ reading, observed });
-  }
-  const dates = [...byDate].map(([date, entries], dateIndex) => `<details class="data-tree-node data-tree-date" ${dateIndex === 0 ? "open" : ""}><summary>${icon("calendar")}<strong>${date}</strong><span>${entries.length} sample${entries.length === 1 ? "" : "s"}</span></summary><div class="data-tree-children">${entries.map(({ reading, observed }, sampleIndex) => {
-    const time = observed.toLocaleTimeString("en-GB", { timeZone: "Asia/Kolkata", hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit", fractionalSecondDigits: 3 }).replaceAll(":", "-");
-    return `<details class="data-tree-node data-tree-sample" ${dateIndex === 0 && sampleIndex === 0 ? "open" : ""}><summary>${icon("clock")}<strong>${time}</strong><span>${escapeHtml(reading.status || "unknown")}</span></summary><div class="data-tree-values">
-      ${treeValue("flowLpm", reading.metrics?.flowLpm, "L/min")}${treeValue("pressureBar", reading.metrics?.pressureBar, "bar")}${treeValue("suctionKpa", reading.metrics?.suctionKpa, "kPa")}
-      ${treeValue("PV1", reading.raw?.pv1)}${treeValue("PV2", reading.raw?.pv2)}${treeValue("PV3", reading.raw?.pv3)}
-      ${treeValue("ERR1", reading.errors?.flow)}${treeValue("ERR2", reading.errors?.suction)}${treeValue("ERR3", reading.errors?.pressure)}
-      ${treeValue("source", reading.source || "—")}${treeValue("calibration", reading.calibrationVersion || "—")}
-    </div></details>`;
-  }).join("")}</div></details>`).join("");
-  return `${pageHead("Live sensor data", "Stored MQTT readings from the authenticated ESP32-S3 gateway", `<span class="updated-note"><i class="pulse-dot"></i>${state.lastTelemetryAt ? `Last sample · ${relativeTime(state.lastTelemetryAt)}` : "Waiting for ESP32"}</span><button class="secondary-btn" id="refresh-live-data">${icon("refresh")} Refresh</button>`)}
-    <section class="panel data-tree-panel"><div class="data-tree-root"><div class="data-tree-root-label">${icon("database")}<strong>CAMS</strong><span>MongoDB telemetry</span></div><div class="data-tree-children"><details class="data-tree-node data-tree-device" open><summary>${icon("machine")}<strong>${escapeHtml(machine?.id || "CAMS-01")}</strong><span>${machine ? machine.status : "Waiting"}</span></summary><div class="data-tree-children">${dates || `<div class="empty-state">${icon("pulse")}No sensor values received. Connect PLC → ESP32-S3 RS485 → MQTT.</div>`}</div></details></div></div></section>`;
-}
-
-function treeValue(label, value, unit = "") {
-  const display = value === null || value === undefined ? "—" : `${value}${unit ? ` ${unit}` : ""}`;
-  return `<div class="data-tree-value"><span>${escapeHtml(label)}</span><strong>${escapeHtml(display)}</strong></div>`;
-}
-
-function pageHead(title, subtitle, actions = "") {
-  return `<div class="page-head"><div><h1>${title}</h1><p>${subtitle}</p></div>${actions ? `<div class="page-actions">${actions}</div>` : ""}</div>`;
-}
-
-const parameterConfig = {
-  Pressure: { field: "pressureBar", unit: "bar", fallbackSpan: 1.2 },
-  Flow: { field: "flowLpm", unit: "L/min", fallbackSpan: 10 },
-  Suction: { field: "suctionKpa", unit: "kPa", fallbackSpan: 1.2 }
-};
-
-function historyFor(machineId, parameter) {
-  const config = parameterConfig[parameter] || parameterConfig.Pressure;
-  return (machineHistory.get(machineId) || [])
-    .map(reading => ({ value: Number(reading.metrics?.[config.field]), observedAt: reading.observedAt }))
-    .filter(point => Number.isFinite(point.value));
-}
-
-function chartSvg(parameter = "Pressure", readings = []) {
-  const c = parameterConfig[parameter] || parameterConfig.Pressure;
-  if (!readings.length) return `<div class="empty-state">${icon("pulse")}Waiting for live telemetry history.</div>`;
-  const pointsToPlot = readings.length === 1 ? [readings[0], readings[0]] : readings;
-  const values = pointsToPlot.map(point => point.value);
-  const actualMin = Math.min(...values);
-  const actualMax = Math.max(...values);
-  const padding = Math.max((actualMax - actualMin) * 0.15, c.fallbackSpan * 0.08);
-  const min = actualMin - padding;
-  const max = actualMax + padding;
-  const x = i => 48 + i * (632 / (values.length - 1));
-  const y = value => 18 + ((max - value) / (max - min)) * 178;
-  const points = values.map((value, i) => `${x(i).toFixed(1)},${y(value).toFixed(1)}`).join(" ");
-  const areaPoints = `48,196 ${points} 680,196`;
-  const grid = [0, 1, 2, 3, 4].map(i => {
-    const gy = 18 + i * 44.5;
-    const label = (max - i * ((max - min) / 4)).toFixed(Math.abs(max) < 10 ? 1 : 0);
-    return `<line class="chart-grid-line" x1="48" y1="${gy}" x2="680" y2="${gy}"/><text class="chart-label" x="3" y="${gy + 4}">${label}</text>`;
-  }).join("");
-  const timeAt = ratio => {
-    const index = Math.min(pointsToPlot.length - 1, Math.round((pointsToPlot.length - 1) * ratio));
-    const value = pointsToPlot[index].observedAt;
-    return value ? new Date(value).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }) : "—";
-  };
-  const times = [0, .25, .5, .75, 1].map((ratio, i) => `<text class="chart-label" x="${48 + 632 * ratio}" y="220" text-anchor="${i === 0 ? "start" : i === 4 ? "end" : "middle"}">${timeAt(ratio)}</text>`).join("");
-  const lastX = x(values.length - 1), lastY = y(values.at(-1));
-  return `<svg viewBox="0 0 700 228" preserveAspectRatio="none" role="img" aria-label="${parameter} trend chart"><defs><linearGradient id="chartFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#42b7a4" stop-opacity=".34"/><stop offset="100%" stop-color="#42b7a4" stop-opacity=".02"/></linearGradient></defs>${grid}<polygon class="chart-area" points="${areaPoints}"/><polyline class="chart-line" points="${points}"/><circle class="chart-point" cx="${lastX}" cy="${lastY}" r="4"/>${times}<text class="chart-label" x="3" y="12">${c.unit}</text></svg>`;
-}
-
-function dashboardPage() {
-  const running = machines.filter(m => m.status === "Running" || m.status === "Alarm").length;
-  const stopped = machines.filter(m => m.status === "Stopped" || m.status === "Offline").length;
-  const stoppedCount = machines.filter(m => m.status === "Stopped").length;
-  const offlineCount = machines.filter(m => m.status === "Offline").length;
-  const activeAlarmCount = alarms.filter(alarm => alarm.status === "Active").length;
-  const availability = machines.length ? Math.round(running / machines.length * 100) : 0;
-  const snapshot = machines.find(machine => machine.id === "CAMS-01") || machines[0] || null;
-  const snapshotHistory = snapshot ? historyFor(snapshot.id, "Pressure") : [];
-  const compactMachines = machines.slice(0, 6).map((machine, index) => `<button class="machine-compact" data-machine="${machine.id}"><span class="machine-num">${String(index + 1).padStart(2, "0")}</span><span><strong>${machine.id}</strong><small>${machine.zone}</small></span>${statusPill(machine.status)}</button>`).join("");
-  const alarmItems = alarms.slice(0, 4).map(alarm => `<div class="alarm-item"><span class="severity-icon ${alarm.severity.toLowerCase()}">${icon(alarm.severity === "Critical" ? "alarm" : "info")}</span><div><strong>${alarm.machine} · ${alarm.parameter}</strong><p>${alarm.message}</p></div><div class="alarm-time"><strong>${alarm.time}</strong><span>${alarm.date}</span></div></div>`).join("");
-  const liveLabel = state.lastTelemetryAt ? `Live · ${relativeTime(state.lastTelemetryAt)}` : "Waiting for telemetry";
-  return `${pageHead("Plant overview", "Real-time compressor status across Demo Spinning Plant", `<span class="updated-note"><i class="pulse-dot"></i>${liveLabel}</span><button class="secondary-btn" id="refresh-dashboard">${icon("refresh")} Refresh</button>`)}
-    <section class="kpi-grid">
-      ${kpi("Total machines", machines.length, "Connected fleet", "machine", "teal")}
-      ${kpi("Running", running, `${availability}% available`, "gauge", "green")}
-      ${kpi("Stopped / offline", stopped, `${stoppedCount} stopped · ${offlineCount} offline`, "stop", "slate")}
-      ${kpi("Active alarms", activeAlarmCount, activeAlarmCount ? `${activeAlarmCount} require attention` : "No live alarms", "alarm", "red")}
-    </section>
-    <section class="dashboard-grid">
-      <article class="panel">
-        <header class="panel-head"><div class="panel-title"><h2>Live operating snapshot</h2><p>${snapshot ? `${snapshot.id} · ${snapshot.name}` : "No connected machine"}</p></div>${snapshot ? `<button class="panel-link" data-machine="${snapshot.id}">View machine →</button>` : ""}</header>
-        <div class="panel-body">
-          <div class="sensor-row">${sensorMini("Flow", snapshot ? fmt(snapshot.flow) : "—", "L/min")}${sensorMini("Pressure", snapshot ? fmt(snapshot.pressure) : "—", "bar")}${sensorMini("Suction", snapshot ? fmt(snapshot.suction) : "—", "kPa")}</div>
-          <div class="chart-toolbar"><div class="chart-legend"><i class="legend-line"></i>Pressure · ${snapshot?.id || "—"}</div><div class="segment-control"><button>15m</button><button class="active">1h</button><button>6h</button><button>24h</button></div></div>
-          <div class="chart">${chartSvg("Pressure", snapshotHistory)}</div>
-        </div>
-      </article>
-      <article class="panel">
-        <header class="panel-head"><div class="panel-title"><h2>Machine health</h2><p>Fleet status at a glance</p></div><button class="panel-link" data-page="machines">View all ${machines.length} →</button></header>
-        <div class="panel-body"><div class="machine-list">${compactMachines || `<div class="empty-state">${icon("machine")}No machines are registered.</div>`}</div></div>
-      </article>
-    </section>
-    <section class="panel">
-      <header class="panel-head"><div class="panel-title"><h2>Recent alarms & events</h2><p>Latest operating exceptions from all machines</p></div><button class="panel-link" data-page="alarms">Open alarm centre →</button></header>
-      <div class="alarm-list">${alarmItems || `<div class="empty-state">${icon("check")}No live alarms received.</div>`}</div>
-    </section>`;
-}
-
-function kpi(label, value, note, iconName, tone) {
-  return `<article class="kpi-card"><div class="kpi-top"><span class="kpi-label">${label}</span><span class="kpi-icon ${tone}">${icon(iconName)}</span></div><div class="kpi-value"><strong>${value}</strong><span>${note}</span></div></article>`;
-}
-
-function sensorMini(label, value, unit) {
-  return `<div class="sensor-mini"><div class="sensor-mini-head"><span>${label}</span><i class="live-dot"></i></div><strong>${value}</strong><small>${unit}</small></div>`;
-}
-
-function machinesPage() {
-  const filtered = machines.filter(machine => (state.machineFilter === "All" || machine.status === state.machineFilter) && (machine.id.toLowerCase().includes(state.machineSearch.toLowerCase()) || machine.name.toLowerCase().includes(state.machineSearch.toLowerCase()) || machine.zone.toLowerCase().includes(state.machineSearch.toLowerCase())));
-  const filters = ["All", "Running", "Stopped", "Alarm", "Offline"].map(filter => `<button class="filter-pill ${state.machineFilter === filter ? "active" : ""}" data-filter="${filter}">${filter}${filter === "All" ? ` · ${machines.length}` : ""}</button>`).join("");
-  const rows = filtered.map((machine, index) => `<tr class="clickable" data-machine="${machine.id}">
-    <td><div class="machine-cell"><span class="machine-num">${String(machines.indexOf(machine) + 1).padStart(2, "0")}</span><span><strong>${machine.id}</strong><small>${machine.zone}</small></span></div></td>
-    <td>${statusPill(machine.status)}</td><td>${fmt(machine.pressure, "bar")}</td><td>${fmt(machine.flow, "L/min")}</td><td>${fmt(machine.suction, "kPa")}</td><td>${machine.updated}</td>
-    <td><div class="health-score"><div class="health-bar"><span style="width:${machine.health}%"></span></div><small>${machine.health ? `${machine.health}%` : "—"}</small></div></td>
-    <td><button class="row-action" data-machine="${machine.id}">View details</button></td>
-  </tr>`).join("");
-  return `${pageHead("Machines", `Monitor and compare ${machines.length} connected compressor systems`, `<button class="secondary-btn" id="export-machines">${icon("download")} Export list</button>`)}
-    <div class="filter-bar"><div class="search-wrap">${icon("search")}<input id="machine-search" type="search" value="${state.machineSearch}" placeholder="Search ID, name or area…"></div><div class="filter-pills">${filters}</div></div>
-    <section class="panel"><div class="table-wrap"><table class="data-table"><thead><tr><th>Machine</th><th>Status</th><th>Pressure</th><th>Flow</th><th>Suction</th><th>Last update</th><th>Health</th><th>Action</th></tr></thead><tbody>${rows || `<tr><td colspan="8"><div class="empty-state">${icon("search")}No machines match this filter.</div></td></tr>`}</tbody></table></div></section>`;
-}
-
-function machineDetailPage() {
-  const machine = machines.find(item => item.id === state.machineId) || machines[0];
-  if (!machine) return `${pageHead("Machine details", "No machine is currently available")}<div class="empty-state">${icon("machine")}Register a machine and publish telemetry to view details.</div>`;
-  const value = (key, unit) => machine[key] === null || machine[key] === undefined ? "—" : `${machine[key]} <small>${unit}</small>`;
-  const related = alarms.filter(alarm => alarm.machine === machine.id).slice(0, 3);
-  const pressureHistory = historyFor(machine.id, "Pressure");
-  return `<button class="back-link" data-page="machines">${icon("arrowLeft")} Back to machines</button>
-    ${pageHead(`<span class="machine-head-title">${machine.id} ${statusPill(machine.status === "Offline" ? "Offline" : "Online")}</span>`, `${machine.name} · ${machine.zone}`, `<button class="secondary-btn" id="export-machine-pdf">${icon("report")} PDF</button><button class="secondary-btn" id="export-machine-xlsx">${icon("download")} Excel</button>`)}
-    <div class="meta-line"><span>${icon("gauge")} Mode: ${machine.status}</span><span>${icon("clock")} Last update: ${machine.updated}</span><span>${icon("wifi")} Communication: ${machine.status === "Offline" ? "Interrupted" : "Stable · 98%"}</span></div>
-    <div style="height:18px"></div>
-    <section class="sensor-card-grid">
-      ${sensorCard("Flow", value("flow", "L/min"), "Normal range 22–28 L/min")}
-      ${sensorCard("Pressure", value("pressure", "bar"), "Target range 6.8–7.5 bar")}
-      ${sensorCard("Suction", value("suction", "kPa"), "Verified calibration range 0.6–1.8 kPa")}
-    </section>
-    <section class="panel diagnostics-panel"><header class="panel-head"><div class="panel-title"><h2>PLC diagnostics</h2><p>Raw Modbus registers and conversion traceability</p></div><span class="updated-note">${machine.source || "Waiting for gateway"}</span></header>
-      <div class="diagnostic-grid">${diagnosticValue("PV1 · Flow", machine.raw?.pv1, `ERR1 ${machine.errors?.flow ?? "—"}`, machine.quality?.flow)}${diagnosticValue("PV2 · Suction", machine.raw?.pv2, `ERR2 ${machine.errors?.suction ?? "—"}`, machine.quality?.suction)}${diagnosticValue("PV3 · Pressure", machine.raw?.pv3, `ERR3 ${machine.errors?.pressure ?? "—"}`, machine.quality?.pressure)}${diagnosticValue("Calibration", machine.calibrationVersion || "—", "1-second sampling", machine.quality?.modbus)}</div>
-    </section>
-    <section class="detail-grid">
-      <article class="panel"><header class="panel-head"><div class="panel-title"><h2>Operating trend</h2><p>Pressure · last 60 minutes</p></div><div class="segment-control"><button>15m</button><button class="active">1h</button><button>6h</button><button>24h</button></div></header><div class="panel-body"><div class="chart tall">${chartSvg("Pressure", pressureHistory)}</div></div></article>
-      <div class="info-stack">
-        <article class="panel"><header class="panel-head"><div class="panel-title"><h2>Machine health</h2><p>Current operating state</p></div></header><div class="state-list"><div class="state-row"><span>Operation</span>${statusPill(machine.status)}</div><div class="state-row"><span>PLC link</span>${statusPill(machine.status === "Offline" ? "Offline" : "Online")}</div><div class="state-row"><span>Gateway</span>${statusPill(machine.status === "Offline" ? "Offline" : "Online")}</div><div class="state-row"><span>Overall health</span><strong>${machine.health ? `${machine.health}%` : "—"}</strong></div></div></article>
-        <article class="panel"><header class="panel-head"><div class="panel-title"><h2>Service summary</h2><p>Preventive maintenance</p></div></header><div class="service-progress"><div class="service-big"><strong>${machine.hours === null ? "—" : `${machine.hours.toLocaleString()} h`}</strong><span>Running hours</span></div><div class="progress-track"><span style="width:0%"></span></div><div class="service-dates"><span>Service records not connected</span><span>Maintenance module · next phase</span></div></div></article>
-        <article class="panel"><header class="panel-head"><div class="panel-title"><h2>Alarm summary</h2><p>${related.length} recent event${related.length === 1 ? "" : "s"}</p></div><button class="panel-link" data-page="alarms">View all →</button></header><div class="alarm-list">${related.length ? related.map(alarm => `<div class="alarm-item"><span class="severity-icon ${alarm.severity.toLowerCase()}">${icon("alarm")}</span><div><strong>${alarm.parameter} · ${alarm.value}</strong><p>${alarm.message}</p></div></div>`).join("") : `<div class="empty-state">${icon("check")}No recent alarms for this machine.</div>`}</div></article>
-      </div>
-    </section>`;
-}
-
-function sensorCard(label, value, range) {
-  return `<article class="sensor-card"><div class="sensor-card-top"><span class="sensor-card-label">${label}</span><span class="live-tag"><i class="live-dot"></i> LIVE</span></div><div class="sensor-card-value">${value}</div><div class="sensor-range">${range}</div></article>`;
-}
-
-function diagnosticValue(label, value, detail, quality) {
-  const normalized = quality || "unknown";
-  return `<div class="diagnostic-value"><span>${label}</span><strong>${value ?? "—"}</strong><small>${detail} · <b class="quality-${normalized}">${normalized}</b></small></div>`;
-}
-
-function trendsPage() {
-  const machine = machines.find(item => item.id === state.trendMachine) || machines[0];
-  if (!machine) return `${pageHead("Trends & analytics", "No machine telemetry is available")}<div class="empty-state">${icon("trend")}Publish telemetry to begin charting.</div>`;
-  const history = historyFor(machine.id, state.trendParameter);
-  const values = history.map(point => point.value);
-  const current = values.at(-1) ?? null;
-  const minimum = values.length ? Math.min(...values) : null;
-  const maximum = values.length ? Math.max(...values) : null;
-  const average = values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
-  const unit = (parameterConfig[state.trendParameter] || parameterConfig.Pressure).unit;
-  const selects = machines.map(m => `<option value="${m.id}" ${m.id === state.trendMachine ? "selected" : ""}>${m.id} · ${m.name}</option>`).join("");
-  const parameters = ["Pressure", "Flow", "Suction"].map(parameter => `<option value="${parameter}" ${parameter === state.trendParameter ? "selected" : ""}>${parameter}</option>`).join("");
-  const ranges = ["15m", "1h", "6h", "24h", "7d", "Custom"].map(range => `<button class="${state.trendRange === range ? "active" : ""}" data-range="${range}">${range}</button>`).join("");
-  return `${pageHead("Trends & analytics", "Explore live and historical operating parameters", `<button class="secondary-btn" id="export-trend-pdf">${icon("report")} PDF</button><button class="secondary-btn" id="export-trend-xlsx">${icon("download")} Excel</button>`)}
-    <section class="trend-controls"><div class="control-group grow"><label>Machine</label><div class="select-wrap"><select id="trend-machine">${selects}</select>${icon("chevronDown")}</div></div><div class="control-group"><label>Parameter</label><div class="select-wrap"><select id="trend-parameter">${parameters}</select>${icon("chevronDown")}</div></div><div class="control-group grow"><label>Time range</label><div class="range-pills">${ranges}</div></div></section>
-    <article class="panel"><header class="panel-head"><div class="panel-title"><h2>${state.trendParameter} history</h2><p>${machine.id} · ${state.trendRange === "Custom" ? "custom range preview" : `last ${state.trendRange}`}</p></div><span class="updated-note"><i class="pulse-dot"></i>Live sampling</span></header>
-      <div class="panel-body"><div class="chart tall">${chartSvg(state.trendParameter, history)}</div></div>
-      <div class="trend-stat-grid">${trendStat("Current", current, unit)}${trendStat("Minimum", minimum, unit)}${trendStat("Maximum", maximum, unit)}${trendStat("Average", average, unit)}</div>
-    </article>`;
-}
-
-function trendStat(label, value, unit) {
-  return `<div class="trend-stat"><span>${label}</span><strong>${value === null ? "—" : Number(value).toFixed(1)} <small>${unit}</small></strong></div>`;
-}
-
-function alarmsPage() {
-  const filters = ["All", "Critical", "Warning", "Info", "Resolved"].map(filter => `<button class="filter-pill ${state.alarmFilter === filter ? "active" : ""}" data-alarm-filter="${filter}">${filter}</button>`).join("");
-  const visible = alarms.filter(alarm => state.alarmFilter === "All" || (state.alarmFilter === "Resolved" ? alarm.status === "Resolved" : alarm.severity === state.alarmFilter));
-  const rows = visible.map(alarm => `<tr><td><strong>${alarm.time}</strong><br><small>${alarm.date}</small></td><td><strong>${alarm.machine}</strong></td><td>${alarm.parameter}</td><td>${alarm.value}</td><td>${statusPill(alarm.severity)}</td><td>${statusPill(alarm.status)}</td><td><div class="table-actions"><button class="mini-action" data-view-alarm="${alarm.id}">View</button><button class="mini-action" data-ack="${alarm.id}" ${alarm.status !== "Active" ? "disabled" : ""}>Acknowledge</button><button class="mini-action" data-resolve="${alarm.id}" ${alarm.status === "Resolved" ? "disabled" : ""}>Resolve</button></div></td></tr>`).join("");
-  const count = (severity, status = "Active") => alarms.filter(alarm => alarm.severity === severity && alarm.status === status).length;
-  const resolved = alarms.filter(alarm => alarm.status === "Resolved").length;
-  return `${pageHead("Alarms & events", "Review, acknowledge and resolve plant operating exceptions", `<button class="secondary-btn" id="export-alarms">${icon("download")} Export history</button>`)}
-    <section class="alarm-summary">${alarmSummary("Critical", count("Critical"), "alarm", "critical")}${alarmSummary("Warning", count("Warning"), "alarm", "warning")}${alarmSummary("Information", count("Info"), "info", "info")}${alarmSummary("Resolved", resolved, "check", "info")}</section>
-    <div class="filter-bar"><div class="filter-pills">${filters}</div><button class="secondary-btn">${icon("filter")} More filters</button></div>
-    <section class="panel"><div class="table-wrap"><table class="data-table"><thead><tr><th>Time</th><th>Machine</th><th>Parameter</th><th>Value</th><th>Severity</th><th>Status</th><th>Action</th></tr></thead><tbody>${rows || `<tr><td colspan="7"><div class="empty-state">${icon("check")}No live alarms received.</div></td></tr>`}</tbody></table></div></section>`;
-}
-
-function alarmSummary(label, count, iconName, tone) {
-  return `<article class="alarm-summary-card"><span class="severity-icon ${tone}">${icon(iconName)}</span><div><span>${label}</span><strong>${count}</strong></div></article>`;
-}
-
-function phasePage(title, tag, headline, description, features) {
-  return `${pageHead(title, "Preview of the planned CAMS capability")}
-    <section class="placeholder-layout"><article class="panel phase-card"><span class="phase-tag">${tag}</span><h2>${headline}</h2><p>${description}</p></article><article class="panel"><header class="panel-head"><div class="panel-title"><h2>Planned capabilities</h2><p>For owner discussion and scope review</p></div></header><div class="feature-list">${features.map(([iconName, name, copy]) => `<div class="feature-item">${icon(iconName)}<div><strong>${name}</strong><span>${copy}</span></div></div>`).join("")}</div></article></section>`;
-}
-
-function reportsPage() {
-  const options = machines.map(machine => `<option value="${machine.id}" ${machine.id === state.reportMachine ? "selected" : ""}>${machine.id} · ${machine.name}</option>`).join("");
-  const ranges = ["1h", "6h", "24h", "7d"].map(range => `<button class="${state.reportRange === range ? "active" : ""}" data-report-range="${range}">${range}</button>`).join("");
-  return `${pageHead("Reports & exports", "Create protected files from stored CAMS data")}
-    <section class="trend-controls"><div class="control-group grow"><label>Machine</label><div class="select-wrap"><select id="report-machine">${options}</select>${icon("chevronDown")}</div></div><div class="control-group grow"><label>Telemetry range</label><div class="range-pills">${ranges}</div></div></section>
-    <section class="placeholder-layout">
-      <article class="panel phase-card"><span class="phase-tag">LIVE EXPORT</span><h2>Machine telemetry</h2><p>Download up to 5,000 stored readings for ${state.reportMachine} over the selected period.</p><div class="page-actions"><button class="primary-btn" id="report-telemetry-xlsx">${icon("download")} Download Excel</button><button class="secondary-btn" id="report-telemetry-pdf">${icon("report")} Download PDF</button></div></article>
-      <article class="panel phase-card"><span class="phase-tag">LIVE EXPORT</span><h2>Machine fleet</h2><p>Download the registered machine inventory with each compressor's latest telemetry.</p><div class="page-actions"><button class="primary-btn" id="report-fleet-xlsx">${icon("download")} Download Excel</button><button class="secondary-btn" id="report-fleet-pdf">${icon("report")} Download PDF</button></div></article>
-    </section>`;
-}
-
-function settingsPage() {
-  const cards = [
-    ["Plant profile", "Manage site name, areas and shift details.", "Demo Spinning Plant", false],
-    ["Live refresh", "Update connected machine readings automatically.", "Every 1 second", true],
-    ["Alarm notifications", "Show browser alerts for critical conditions.", "Critical & warning", true],
-    ["Engineering units", "Configure units used throughout the dashboard.", "Metric units", false]
-  ];
-  return `${pageHead("Settings", "Configure the CAMS interface and monitoring preferences", `<button class="primary-btn" id="save-settings">Save changes</button>`)}
-    <section class="settings-grid">${cards.map(([title, copy, value, toggle]) => `<article class="setting-card"><h3>${title}</h3><p>${copy}</p><div class="toggle-row"><strong>${value}</strong>${toggle ? '<button class="toggle on" aria-label="Toggle setting"></button>' : '<button class="secondary-btn">Edit</button>'}</div></article>`).join("")}</section>`;
-}
-
-function userDate(value) {
-  if (!value) return "Never";
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? "—" : date.toLocaleString("en-IN", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
-}
-
-function usersPage() {
-  if (!state.currentUser?.isOwner) {
-    return `${pageHead("Users", "Owner access is required")}<div class="empty-state">${icon("shield")}You do not have permission to manage CAMS users.</div>`;
-  }
-  const activeUsers = state.managedUsers.filter(user => user.active).length;
-  const rows = state.managedUsers.map(user => `<tr>
-    <td><div class="user-identity"><span class="avatar">${escapeHtml(initials(user.displayName))}</span><span><strong>${escapeHtml(user.displayName)}</strong><small>@${escapeHtml(user.username)}</small></span></div></td>
-    <td>${escapeHtml(user.email)}</td>
-    <td><span class="role-tag">${escapeHtml(user.role)}</span></td>
-    <td>${statusPill(user.active ? "Online" : "Offline")}</td>
-    <td>${escapeHtml(userDate(user.lastLoginAt))}</td>
-    <td><button class="mini-action" data-user-status="${escapeHtml(user.id)}" data-next-active="${user.active ? "false" : "true"}" ${user.id === state.currentUser.id ? "disabled" : ""}>${user.active ? "Disable" : "Enable"}</button></td>
-  </tr>`).join("");
-  const tableBody = state.usersLoading
-    ? `<tr><td colspan="6"><div class="empty-state"><span class="loading-spinner dark"></span>Loading registered users…</div></td></tr>`
-    : rows || `<tr><td colspan="6"><div class="empty-state">${icon("user")}No user accounts are registered.</div></td></tr>`;
-  return `${pageHead("Users", "Create accounts and control access to CAMS")}
-    <section class="user-summary-grid">
-      ${kpi("Registered users", state.managedUsers.length, "All accounts", "user", "teal")}
-      ${kpi("Active accounts", activeUsers, "Allowed to sign in", "shield", "green")}
-    </section>
-    ${state.usersError ? `<div class="inline-error">${escapeHtml(state.usersError)}</div>` : ""}
-    <section class="panel user-create-panel">
-      <header class="panel-head"><div class="panel-title"><h2>Add a CAMS user</h2><p>The temporary password is hashed immediately and is never shown in the user list.</p></div></header>
-      <form id="create-user-form" class="user-create-form">
-        <label><span>Display name</span><input name="displayName" required maxlength="80" autocomplete="name" placeholder="e.g. Plant Operator"></label>
-        <label><span>Username</span><input name="username" required minlength="3" maxlength="32" pattern="[a-z0-9._-]+" autocomplete="off" placeholder="plant.operator"></label>
-        <label><span>Email</span><input name="email" required type="email" autocomplete="email" placeholder="operator@example.com"></label>
-        <label><span>Role</span><select name="role"><option value="viewer">Viewer</option><option value="operator">Operator</option></select></label>
-        <label><span>Temporary password</span><input name="password" required type="password" minlength="12" maxlength="128" autocomplete="new-password" placeholder="At least 12 characters"></label>
-        <button class="primary-btn" type="submit">${icon("user")} Create user</button>
-      </form>
-    </section>
-    <section class="panel">
-      <header class="panel-head"><div class="panel-title"><h2>Registered accounts</h2><p>${activeUsers} active · ${state.managedUsers.length - activeUsers} disabled</p></div><button class="secondary-btn" id="refresh-users">${icon("refresh")} Refresh</button></header>
-      <div class="table-wrap"><table class="data-table user-table"><thead><tr><th>User</th><th>Email</th><th>Role</th><th>Status</th><th>Last login</th><th>Action</th></tr></thead><tbody>${tableBody}</tbody></table></div>
-    </section>`;
 }
 
 async function loadManagedUsers({ render = true } = {}) {
@@ -871,8 +926,9 @@ function bindGlobalEvents() {
   document.querySelectorAll("[data-machine]").forEach(button => button.addEventListener("click", event => {
     event.stopPropagation();
     state.machineId = button.dataset.machine;
+    window.sessionStorage.setItem("cams.machineId", state.machineId);
     navigate("machine-detail");
-    loadMachineHistory(state.machineId, "1h").catch(error => showToast(error.message));
+    loadMachineHistory(state.machineId, state.detailRange).catch(error => showToast(error.message));
   }));
   document.querySelector("#mobile-menu")?.addEventListener("click", () => { state.mobileOpen = true; renderApp(); });
   document.querySelector("#mobile-overlay")?.addEventListener("click", () => { state.mobileOpen = false; renderApp(); });
@@ -885,6 +941,7 @@ function bindGlobalEvents() {
     try {
       await authApi.signOut();
       closeTelemetryStream();
+      stopLiveSync();
       state.authenticated = false;
       state.currentUser = null;
       state.userMenuOpen = false;
@@ -896,12 +953,85 @@ function bindGlobalEvents() {
   });
 }
 
+function bindConnectedProcessChart() {
+  const chart = document.querySelector("#connected-process-chart");
+  if (!chart) return;
+  const stage = chart.querySelector(".process-chart-stage");
+  const tooltip = chart.querySelector("#process-tooltip");
+  const crosshair = chart.querySelector("#process-crosshair");
+  const nodes = [...chart.querySelectorAll(".process-node")];
+  let pinnedNode = null;
+
+  const showReading = (node) => {
+    const timestamp = new Date(node.dataset.observedAt);
+    const displayTime = Number.isNaN(timestamp.getTime()) ? "Unknown time" : timestamp.toLocaleString("en-IN", {
+      day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit"
+    });
+    tooltip.querySelector("[data-tooltip-time]").textContent = displayTime;
+    tooltip.querySelector("[data-tooltip-pressure]").textContent = node.dataset.pressure;
+    tooltip.querySelector("[data-tooltip-flow]").textContent = node.dataset.flow;
+    tooltip.querySelector("[data-tooltip-suction]").textContent = node.dataset.suction;
+    tooltip.querySelector("[data-tooltip-status]").textContent = displayStatus(node.dataset.status);
+    tooltip.querySelector("[data-tooltip-quality]").textContent = displayStatus(node.dataset.quality);
+
+    const stageBox = stage.getBoundingClientRect();
+    const nodeBox = node.getBoundingClientRect();
+    const nodeX = nodeBox.left + nodeBox.width / 2 - stageBox.left;
+    const nodeY = nodeBox.top + nodeBox.height / 2 - stageBox.top;
+    const tooltipWidth = Math.min(240, stageBox.width - 24);
+    const preferredLeft = nodeX > stageBox.width * .68 ? nodeX - tooltipWidth - 16 : nodeX + 16;
+    tooltip.style.left = `${Math.max(12, Math.min(stageBox.width - tooltipWidth - 12, preferredLeft))}px`;
+    tooltip.style.top = `${Math.max(10, Math.min(stageBox.height - 188, nodeY - 76))}px`;
+    tooltip.classList.add("active");
+    crosshair.setAttribute("x1", node.getAttribute("cx"));
+    crosshair.setAttribute("x2", node.getAttribute("cx"));
+    crosshair.classList.add("active");
+    nodes.forEach(item => item.classList.toggle("is-selected", item === node));
+  };
+
+  const hideReading = () => {
+    if (pinnedNode) return;
+    tooltip.classList.remove("active");
+    crosshair.classList.remove("active");
+    nodes.forEach(node => node.classList.remove("is-selected"));
+  };
+
+  nodes.forEach(node => {
+    node.addEventListener("pointerenter", () => showReading(node));
+    node.addEventListener("focus", () => showReading(node));
+    node.addEventListener("blur", hideReading);
+    node.addEventListener("click", event => {
+      event.stopPropagation();
+      pinnedNode = pinnedNode === node ? null : node;
+      if (pinnedNode) showReading(node);
+      else hideReading();
+    });
+    node.addEventListener("keydown", event => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        node.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      }
+      if (event.key === "Escape") {
+        pinnedNode = null;
+        hideReading();
+        node.blur();
+      }
+    });
+  });
+
+  stage.addEventListener("pointerleave", hideReading);
+  stage.addEventListener("click", () => {
+    pinnedNode = null;
+    hideReading();
+  });
+}
+
 function bindPageEvents() {
   document.querySelector("#refresh-dashboard")?.addEventListener("click", async () => {
     try {
       await loadMachines({ render: false });
-      const snapshot = machines.find(machine => machine.id === "CAMS-01") || machines[0];
-      if (snapshot) await loadMachineHistory(snapshot.id, "1h", { render: false });
+      const snapshot = machines.find(machine => machine.id === state.machineId) || machines[0];
+      if (snapshot) await loadMachineHistory(snapshot.id, state.dashboardRange, { render: false });
       renderApp();
       showToast("Live readings refreshed from the CAMS API.");
     } catch (error) {
@@ -917,24 +1047,77 @@ function bindPageEvents() {
     search.setSelectionRange(position, position);
   });
   document.querySelectorAll("[data-filter]").forEach(button => button.addEventListener("click", () => { state.machineFilter = button.dataset.filter; renderApp(); }));
-  document.querySelectorAll("[data-alarm-filter]").forEach(button => button.addEventListener("click", () => { state.alarmFilter = button.dataset.alarmFilter; renderApp(); }));
-  document.querySelectorAll("[data-ack]").forEach(button => button.addEventListener("click", () => updateAlarm(Number(button.dataset.ack), "Acknowledged")));
-  document.querySelectorAll("[data-resolve]").forEach(button => button.addEventListener("click", () => updateAlarm(Number(button.dataset.resolve), "Resolved")));
-  document.querySelectorAll("[data-view-alarm]").forEach(button => button.addEventListener("click", () => {
-    const alarm = alarms.find(item => item.id === Number(button.dataset.viewAlarm));
-    showToast(`${alarm.machine}: ${alarm.message}`);
+  document.querySelector("#dashboard-parameter")?.addEventListener("change", event => {
+    state.dashboardParameter = event.target.value;
+    window.sessionStorage.setItem("cams.dashboardParameter", state.dashboardParameter);
+    renderApp();
+  });
+  document.querySelectorAll("[data-dashboard-range]").forEach(button => button.addEventListener("click", () => {
+    state.dashboardRange = button.dataset.dashboardRange;
+    window.sessionStorage.setItem("cams.dashboardRange", state.dashboardRange);
+    renderApp();
+    if (state.machineId) loadMachineHistory(state.machineId, state.dashboardRange).catch(error => showToast(error.message));
   }));
+  document.querySelector("#add-machine")?.addEventListener("click", () => openMachineModal("create"));
+  document.querySelector("#removed-machines")?.addEventListener("click", async () => {
+    state.machineModal = { type: "removed", machine: null };
+    await loadRemovedMachines();
+  });
+  document.querySelectorAll("[data-edit-machine]").forEach(button => button.addEventListener("click", event => {
+    event.stopPropagation();
+    const machine = machines.find(item => item.id === button.dataset.editMachine);
+    if (machine) openMachineModal("edit", machine);
+  }));
+  document.querySelectorAll("[data-delete-machine]").forEach(button => button.addEventListener("click", event => {
+    event.stopPropagation();
+    const machine = machines.find(item => item.id === button.dataset.deleteMachine);
+    if (machine) openMachineModal("delete", machine);
+  }));
+  document.querySelector("#machine-modal-close")?.addEventListener("click", closeMachineModal);
+  document.querySelector("#machine-modal-cancel")?.addEventListener("click", closeMachineModal);
+  document.querySelector("#machine-modal-backdrop")?.addEventListener("click", event => {
+    if (event.target === event.currentTarget) closeMachineModal();
+  });
+  document.querySelector("#machine-form")?.addEventListener("submit", saveMachine);
+  document.querySelector("#confirm-machine-delete")?.addEventListener("click", removeSelectedMachine);
+  document.querySelectorAll("[data-restore-machine]").forEach(button => button.addEventListener("click", () => {
+    restoreRemovedMachine(button.dataset.restoreMachine, button.dataset.siteId, button);
+  }));
+  document.querySelectorAll("[data-alarm-filter]").forEach(button => button.addEventListener("click", () => { state.alarmFilter = button.dataset.alarmFilter; renderApp(); }));
+  document.querySelectorAll("[data-ack]").forEach(button => button.addEventListener("click", () => openAlarmAction(button.dataset.ack, "Acknowledged")));
+  document.querySelectorAll("[data-resolve]").forEach(button => button.addEventListener("click", () => openAlarmAction(button.dataset.resolve, "Resolved")));
+  document.querySelectorAll("[data-view-alarm]").forEach(button => button.addEventListener("click", () => openAlarmHistory(button.dataset.viewAlarm)));
+  document.querySelector("#alarm-modal-close")?.addEventListener("click", closeAlarmModal);
+  document.querySelector("#alarm-modal-cancel")?.addEventListener("click", closeAlarmModal);
+  document.querySelector("#alarm-modal-backdrop")?.addEventListener("click", event => {
+    if (event.target === event.currentTarget) closeAlarmModal();
+  });
+  document.querySelector("#alarm-audit-form")?.addEventListener("submit", submitAlarmAction);
   document.querySelector("#trend-machine")?.addEventListener("change", event => {
     state.trendMachine = event.target.value;
     renderApp();
     loadMachineHistory(state.trendMachine, state.trendRange).catch(error => showToast(error.message));
   });
-  document.querySelector("#trend-parameter")?.addEventListener("change", event => { state.trendParameter = event.target.value; renderApp(); });
+  document.querySelector("#trend-parameter")?.addEventListener("change", event => {
+    state.trendParameter = event.target.value;
+    window.sessionStorage.setItem("cams.trendParameter", state.trendParameter);
+    renderApp();
+  });
   document.querySelectorAll("[data-range]").forEach(button => button.addEventListener("click", () => {
     state.trendRange = button.dataset.range;
     renderApp();
     loadMachineHistory(state.trendMachine, state.trendRange).catch(error => showToast(error.message));
   }));
+  document.querySelectorAll("[data-detail-range]").forEach(button => button.addEventListener("click", () => {
+    state.detailRange = button.dataset.detailRange;
+    renderApp();
+    loadMachineHistory(state.machineId, state.detailRange).catch(error => showToast(error.message));
+  }));
+  document.querySelector("#detail-parameter")?.addEventListener("change", event => {
+    state.detailParameter = event.target.value;
+    window.sessionStorage.setItem("cams.detailParameter", state.detailParameter);
+    renderApp();
+  });
   document.querySelector("#report-machine")?.addEventListener("change", event => {
     state.reportMachine = event.target.value;
     renderApp();
@@ -943,11 +1126,10 @@ function bindPageEvents() {
     state.reportRange = button.dataset.reportRange;
     renderApp();
   }));
-  document.querySelectorAll(".toggle").forEach(button => button.addEventListener("click", () => button.classList.toggle("on")));
-  document.querySelector("#save-settings")?.addEventListener("click", () => showToast("Interface preferences saved for review."));
+  document.querySelector("#settings-form")?.addEventListener("submit", saveSettings);
   document.querySelector("#refresh-users")?.addEventListener("click", () => loadManagedUsers());
   document.querySelector("#refresh-live-data")?.addEventListener("click", () => {
-    const machineId = machines.find(machine => machine.id === "CAMS-01")?.id;
+    const machineId = machines.find(machine => machine.id === state.machineId)?.id;
     if (machineId) loadMachineHistory(machineId, "24h").catch(error => showToast(error.message));
   });
   document.querySelector("#create-user-form")?.addEventListener("submit", async event => {
@@ -989,11 +1171,108 @@ function bindPageEvents() {
   bindDownload("#report-fleet-xlsx", () => "/api/exports/machines/xlsx");
   bindDownload("#report-fleet-pdf", () => "/api/exports/machines/pdf");
   document.querySelector("#export-alarms")?.addEventListener("click", () => showToast("Alarm exports will be enabled when real alarm storage is connected."));
+  bindConnectedProcessChart();
 }
 
-function updateAlarm(id, nextStatus) {
-  alarms = alarms.map(alarm => alarm.id === id ? { ...alarm, status: nextStatus } : alarm);
+function settingsPayload(form) {
+  const data = new FormData(form);
+  const number = name => Number(data.get(name));
+  return {
+    siteId: state.settings?.siteId || "plant-01",
+    plant: { name: data.get("plant.name"), area: data.get("plant.area"), shift: data.get("plant.shift") },
+    thresholds: {
+      pressureBar: { minimum: number("thresholds.pressureBar.minimum"), maximum: number("thresholds.pressureBar.maximum") },
+      flowLpm: { minimum: number("thresholds.flowLpm.minimum"), maximum: number("thresholds.flowLpm.maximum") },
+      suctionKpa: { minimum: number("thresholds.suctionKpa.minimum"), maximum: number("thresholds.suctionKpa.maximum") }
+    },
+    sampling: { intervalSeconds: number("sampling.intervalSeconds"), staleAfterSeconds: number("sampling.staleAfterSeconds") },
+    retentionDays: number("retentionDays"),
+    notifications: {
+      browserEnabled: data.has("notifications.browserEnabled"), critical: data.has("notifications.critical"),
+      warning: data.has("notifications.warning"), info: data.has("notifications.info")
+    }
+  };
+}
+
+async function saveSettings(event) {
+  event.preventDefault();
+  if (!state.currentUser?.isOwner) return;
+  const form = event.currentTarget;
+  const payloadToSave = settingsPayload(form);
+  state.settingsSaving = true;
+  state.settingsError = "";
   renderApp();
+  try {
+    const payload = await authApi.request("/api/settings", { method: "PUT", body: JSON.stringify(payloadToSave) });
+    state.settings = payload.settings;
+    if (state.settings.notifications.browserEnabled && window.Notification?.permission === "default") Notification.requestPermission().catch(() => {});
+    startLiveSync();
+    await loadMachines({ render: false });
+    showToast("Plant settings saved and applied live.");
+  } catch (error) {
+    state.settingsError = error.message;
+  } finally {
+    state.settingsSaving = false;
+    renderApp();
+  }
+}
+
+function openAlarmAction(alarmId, status) {
+  state.alarmModal = { type: "action", alarmId, status };
+  state.alarmAuditError = "";
+  renderApp();
+  document.querySelector("#alarm-audit-form textarea")?.focus();
+}
+
+async function openAlarmHistory(alarmId) {
+  state.alarmModal = { type: "history", alarmId };
+  state.alarmHistory = [];
+  state.alarmHistoryLoading = true;
+  state.alarmAuditError = "";
+  renderApp();
+  try {
+    const payload = await authApi.request(`/api/alarms/${encodeURIComponent(alarmId)}/history`);
+    state.alarmHistory = payload.history || [];
+  } catch (error) {
+    state.alarmAuditError = error.message;
+  } finally {
+    state.alarmHistoryLoading = false;
+    renderApp();
+  }
+}
+
+function closeAlarmModal() {
+  state.alarmModal = null;
+  state.alarmHistory = [];
+  state.alarmHistoryLoading = false;
+  state.alarmAuditError = "";
+  renderApp();
+}
+
+async function submitAlarmAction(event) {
+  event.preventDefault();
+  const modal = state.alarmModal;
+  if (!modal || modal.type !== "action") return;
+  const submit = document.querySelector('[type="submit"][form="alarm-audit-form"]');
+  const comment = String(new FormData(event.currentTarget).get("comment") || "").trim();
+  submit.disabled = true;
+  state.alarmAuditError = "";
+  try {
+    await updateAlarm(modal.alarmId, modal.status, comment);
+    state.alarmModal = null;
+    renderApp();
+  } catch (error) {
+    state.alarmAuditError = error.message;
+    renderApp();
+  }
+}
+
+async function updateAlarm(id, nextStatus, comment) {
+  const payload = await authApi.request(`/api/alarms/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ status: nextStatus, comment })
+  });
+  applyAlarm(payload.alarm);
   showToast(`Alarm marked as ${nextStatus.toLowerCase()}.`);
 }
 
@@ -1006,7 +1285,7 @@ function navigate(page) {
     loadMachineHistory(state.trendMachine, state.trendRange).catch(error => showToast(error.message));
   }
   if (page === "live-data") {
-    const machineId = machines.find(machine => machine.id === "CAMS-01")?.id;
+    const machineId = machines.find(machine => machine.id === state.machineId)?.id;
     if (machineId) loadMachineHistory(machineId, "24h").catch(error => showToast(error.message));
   }
   if (page === "users") loadManagedUsers().catch(error => showToast(error.message));
@@ -1023,7 +1302,23 @@ function updateClock() {
 
 window.setInterval(() => { if (state.authenticated) updateClock(); }, 1000);
 
+document.addEventListener("visibilitychange", () => {
+  if (!state.authenticated || document.hidden) return;
+  if (!telemetryStream || telemetryStream.readyState === EventSource.CLOSED) connectTelemetryStream();
+  syncLiveSnapshot();
+});
+
+window.addEventListener("online", () => {
+  if (!state.authenticated) return;
+  connectTelemetryStream();
+  syncLiveSnapshot();
+});
+
 async function initializeAuthentication() {
+  if (state.authView === "reset") {
+    renderLogin();
+    return;
+  }
   try {
     const restoredSession = await authApi.restore();
     if (restoredSession) {
