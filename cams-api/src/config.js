@@ -17,6 +17,18 @@ function boolean(name, fallback) {
   throw new Error(`${name} must be true or false.`);
 }
 
+function number(name, fallback) {
+  const value = Number.parseFloat(process.env[name] || String(fallback));
+  if (!Number.isFinite(value)) throw new Error(`${name} must be a finite number.`);
+  return value;
+}
+
+function range(prefix, minimum, maximum) {
+  const configured = { minimum: number(`${prefix}_MIN`, minimum), maximum: number(`${prefix}_MAX`, maximum) };
+  if (configured.minimum >= configured.maximum) throw new Error(`${prefix}_MIN must be lower than ${prefix}_MAX.`);
+  return configured;
+}
+
 function sameSite(value) {
   if (!["lax", "strict", "none"].includes(value)) {
     throw new Error("COOKIE_SAME_SITE must be lax, strict, or none.");
@@ -72,13 +84,24 @@ export function loadConfig() {
     },
     sessionHours: integer("SESSION_HOURS", 8),
     rememberedSessionDays: integer("REMEMBER_SESSION_DAYS", 7),
+    passwordResetMinutes: integer("PASSWORD_RESET_MINUTES", 30, 5),
+    passwordResetBaseUrl: (process.env.PASSWORD_RESET_BASE_URL || allowedOrigins[0]).replace(/\/$/, ""),
     telemetryRetentionDays: integer("TELEMETRY_RETENTION_DAYS", 7),
+    monitoring: {
+      staleAfterSeconds: integer("TELEMETRY_STALE_SECONDS", 10, 3),
+      thresholds: {
+        pressureBar: range("PRESSURE_BAR", 6.8, 7.5),
+        flowLpm: range("FLOW_LPM", 22, 28),
+        suctionKpa: range("SUCTION_KPA", 0.6, 1.8)
+      }
+    },
     mqtt: {
       enabled: mqttEnabled,
       url: mqttUrl,
       username: mqttUsername,
       password: mqttPassword,
       topic: process.env.MQTT_TOPIC?.trim() || "cams/+/+/telemetry",
+      statusTopic: process.env.MQTT_STATUS_TOPIC?.trim() || "cams/+/+/status",
       clientId: process.env.MQTT_CLIENT_ID?.trim() || "cams-api"
     }
   };

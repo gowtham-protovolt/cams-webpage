@@ -15,9 +15,15 @@ test("stores telemetry, updates latest data, and rejects a duplicate sequence", 
     db.collection("telemetry").deleteMany({}),
     db.collection("telemetryReceipts").deleteMany({}),
     db.collection("latestTelemetry").deleteMany({}),
-    db.collection("machines").deleteMany({})
+    db.collection("machines").deleteMany({}),
+    db.collection("deviceStatus").deleteMany({}),
+    db.collection("alarms").deleteMany({})
   ]);
   const now = new Date();
+  await db.collection("machines").insertOne({
+    siteId: "demo", machineId: "CAMS-01", name: "Compressor 01", zone: "Test Bay",
+    active: true, status: "offline", gatewayStatus: "offline", createdAt: now, updatedAt: now
+  });
   const payload = Buffer.from(JSON.stringify({
     timestamp: now.toISOString(),
     sequence: 987654,
@@ -32,9 +38,11 @@ test("stores telemetry, updates latest data, and rejects a duplicate sequence", 
   const telemetry = parseTelemetryMessage("cams/demo/CAMS-01/telemetry", payload, now);
 
   try {
-    assert.deepEqual(await ingestTelemetry(telemetry, 90), {
-      duplicate: false,
-      latest: {
+    const stored = await ingestTelemetry(telemetry, 90);
+    assert.equal(stored.duplicate, false);
+    assert.equal(stored.latest.monitoring.status, "running");
+    assert.equal(stored.latest.monitoring.health, 92);
+    assert.deepEqual({ ...stored.latest, monitoring: undefined }, {
         siteId: "demo",
         machineId: "CAMS-01",
         hierarchy: telemetry.hierarchy,
@@ -47,14 +55,28 @@ test("stores telemetry, updates latest data, and rejects a duplicate sequence", 
         errors: telemetry.errors,
         quality: telemetry.quality,
         calibrationVersion: telemetry.calibrationVersion,
-        source: telemetry.source
-      }
+        source: telemetry.source,
+        backfilled: false,
+        monitoring: undefined
     });
     assert.deepEqual(await ingestTelemetry(telemetry, 90), { duplicate: true });
     assert.equal(await db.collection("telemetry").countDocuments({}), 1);
     assert.equal((await db.collection("telemetry").findOne({})).hierarchy.root, "CAMS");
     assert.equal((await db.collection("telemetry").findOne({})).hierarchy.device, "CAMS-01");
     assert.equal((await db.collection("latestTelemetry").findOne({ machineId: "CAMS-01" })).metrics.flowLpm, 25.6);
+
+    const olderPayload = Buffer.from(JSON.stringify({
+      timestamp: new Date(now.getTime() - 60 * 60 * 1000).toISOString(),
+      sequence: 987653,
+      status: "alarm",
+      source: "esp32-s3-rs485",
+      metrics: { pressureBar: 6.5, flowLpm: 20, suctionKpa: 0.5 }
+    }));
+    const older = parseTelemetryMessage("cams/demo/CAMS-01/telemetry", olderPayload, now);
+    const backfilled = await ingestTelemetry(older, 90);
+    assert.equal(backfilled.backfilled, true);
+    assert.equal((await db.collection("latestTelemetry").findOne({ machineId: "CAMS-01" })).metrics.flowLpm, 25.6);
+    assert.equal(await db.collection("telemetry").countDocuments({}), 2);
   } finally {
     await closeDatabase();
   }

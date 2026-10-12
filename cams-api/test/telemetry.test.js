@@ -27,9 +27,17 @@ test("parses a valid CAMS MQTT telemetry message", () => {
     root: "CAMS",
     device: "CAMS-01",
     date: "2026-10-05",
-    time: "17-30-00-000",
+    time: "17-30-00",
     timezone: "Asia/Kolkata"
   });
+});
+
+test("keeps CAMS-01, CAMS-02, and CAMS-03 telemetry identities separate", () => {
+  for (const machineId of ["CAMS-01", "CAMS-02", "CAMS-03"]) {
+    const telemetry = parseTelemetryMessage(`cams/plant-01/${machineId}/telemetry`, validPayload, now);
+    assert.equal(telemetry.series.machineId, machineId);
+    assert.equal(telemetry.hierarchy.device, machineId);
+  }
 });
 
 test("rejects malformed topics and out-of-range values", () => {
@@ -44,7 +52,7 @@ test("rejects malformed topics and out-of-range values", () => {
   assert.throws(() => parseTelemetryMessage("cams/demo/CAMS-01/telemetry", invalid, now), /pressureBar/);
 });
 
-test("rejects stale device timestamps", () => {
+test("accepts telemetry inside the offline recovery window", () => {
   const stale = Buffer.from(JSON.stringify({
     timestamp: "2026-10-01T12:00:00.000Z",
     sequence: 125,
@@ -52,7 +60,19 @@ test("rejects stale device timestamps", () => {
     source: "esp32-s3-rs485",
     metrics: { pressureBar: 7, flowLpm: 25, suctionKpa: 1.2 }
   }));
-  assert.throws(() => parseTelemetryMessage("cams/demo/CAMS-01/telemetry", stale, now), /24 hours/);
+  const telemetry = parseTelemetryMessage("cams/demo/CAMS-01/telemetry", stale, now);
+  assert.equal(telemetry.backfilled, true);
+});
+
+test("rejects telemetry outside the offline recovery window", () => {
+  const stale = Buffer.from(JSON.stringify({
+    timestamp: "2026-09-26T12:00:00.000Z",
+    sequence: 126,
+    status: "running",
+    source: "esp32-s3-rs485",
+    metrics: { pressureBar: 7, flowLpm: 25, suctionKpa: 1.2 }
+  }));
+  assert.throws(() => parseTelemetryMessage("cams/demo/CAMS-01/telemetry", stale, now), /8-day recovery/);
 });
 
 test("rejects incomplete PLC diagnostics", () => {

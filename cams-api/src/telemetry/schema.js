@@ -2,6 +2,8 @@ const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const STATUSES = new Set(["running", "stopped", "alarm", "offline"]);
 const QUALITY_VALUES = new Set(["good", "uncertain", "bad"]);
 const INDIA_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+const MAX_BACKFILL_AGE_MS = 8 * 24 * 60 * 60 * 1000;
+const MAX_FUTURE_SKEW_MS = 5 * 60 * 1000;
 
 function hierarchyFor(machineId, observedAt) {
   const indiaTime = new Date(observedAt.getTime() + INDIA_OFFSET_MS).toISOString();
@@ -9,7 +11,7 @@ function hierarchyFor(machineId, observedAt) {
     root: "CAMS",
     device: machineId,
     date: indiaTime.slice(0, 10),
-    time: indiaTime.slice(11, 23).replace(/[.:]/g, "-"),
+    time: indiaTime.slice(11, 19).replaceAll(":", "-"),
     timezone: "Asia/Kolkata"
   };
 }
@@ -60,9 +62,9 @@ export function parseTelemetryMessage(topic, payload, receivedAt = new Date()) {
   if (!Number.isSafeInteger(body.sequence) || body.sequence < 0) throw new Error("Telemetry sequence must be a non-negative safe integer.");
   const observedAt = new Date(body.timestamp);
   if (Number.isNaN(observedAt.getTime())) throw new Error("Telemetry timestamp must be a valid ISO date.");
-  if (Math.abs(observedAt.getTime() - receivedAt.getTime()) > 24 * 60 * 60 * 1000) {
-    throw new Error("Telemetry timestamp differs from server time by more than 24 hours.");
-  }
+  const observationAgeMs = receivedAt.getTime() - observedAt.getTime();
+  if (observationAgeMs > MAX_BACKFILL_AGE_MS) throw new Error("Telemetry timestamp is older than the 8-day recovery window.");
+  if (observationAgeMs < -MAX_FUTURE_SKEW_MS) throw new Error("Telemetry timestamp is more than 5 minutes in the future.");
   const status = String(body.status || "").toLowerCase();
   if (!STATUSES.has(status)) throw new Error("Telemetry status is invalid.");
   const metrics = body.metrics;
@@ -116,6 +118,7 @@ export function parseTelemetryMessage(topic, payload, receivedAt = new Date()) {
     } } : {}),
     ...(calibrationVersion ? { calibrationVersion } : {}),
     source,
-    transport: "mqtt"
+    transport: "mqtt",
+    backfilled: body.backfilled === true || observationAgeMs > 2 * 60 * 1000
   };
 }

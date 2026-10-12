@@ -10,6 +10,7 @@ import { telemetryRouter } from "./routes/telemetry.js";
 import { getMqttStatus } from "./telemetry/mqtt.js";
 import { exportsRouter } from "./routes/exports.js";
 import { usersRouter } from "./routes/users.js";
+import { settingsRouter } from "./routes/settings.js";
 
 export function createApp(config) {
   const app = express();
@@ -18,6 +19,10 @@ export function createApp(config) {
   app.locals.publicUser = publicUser;
 
   app.use(helmet({
+    // Local plant deployments are commonly opened over a LAN IP using HTTP.
+    // Keep HTTPS enforcement for production, but do not make browsers upgrade
+    // local frontend assets to HTTPS when the server is running in development.
+    strictTransportSecurity: config.production ? undefined : false,
     contentSecurityPolicy: {
       directives: {
         defaultSrc: ["'self'"],
@@ -25,7 +30,8 @@ export function createApp(config) {
         styleSrc: ["'self'", "https://fonts.googleapis.com"],
         fontSrc: ["'self'", "https://fonts.gstatic.com"],
         imgSrc: ["'self'", "data:"],
-        connectSrc: ["'self'", ...config.allowedOrigins]
+        connectSrc: ["'self'", ...config.allowedOrigins],
+        upgradeInsecureRequests: config.production ? [] : null
       }
     }
   }));
@@ -53,7 +59,8 @@ export function createApp(config) {
   });
   app.use("/api/auth", authRouter(config));
   app.use("/api/admin", usersRouter());
-  app.use("/api", telemetryRouter());
+  app.use("/api", settingsRouter(config));
+  app.use("/api", telemetryRouter(config));
   app.use("/api", exportsRouter());
 
   if (config.serveWeb) {

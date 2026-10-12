@@ -1,13 +1,19 @@
 import { Router } from "express";
 import { rateLimit } from "express-rate-limit";
+import { createHash, randomBytes } from "node:crypto";
 import { getDatabase } from "../db.js";
-import { hashPassword, normalizeIdentity, verifyPassword } from "../auth/password.js";
+import { hashPassword, normalizeIdentity, validateNewPassword, verifyPassword } from "../auth/password.js";
 import { clearSessionCookie, createSession, hashSessionToken, setSessionCookie } from "../auth/session.js";
 import { requireAuth } from "../middleware/auth.js";
 
 const MAX_FAILED_ATTEMPTS = 5;
 const LOCK_DURATION_MS = 15 * 60 * 1000;
 const dummyPasswordHash = hashPassword("cams-dummy-password-for-timing-only");
+const RESET_RESPONSE = "If an active CAMS account matches, password-reset instructions are ready.";
+
+function hashResetToken(token) {
+  return createHash("sha256").update(token).digest("base64url");
+}
 
 export function authRouter(config) {
   const router = Router();
@@ -17,6 +23,76 @@ export function authRouter(config) {
     standardHeaders: "draft-8",
     legacyHeaders: false,
     message: { error: "Too many sign-in attempts. Try again later." }
+  });
+  const resetLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 10,
+    standardHeaders: "draft-8",
+    legacyHeaders: false,
+    message: { error: "Too many password-reset attempts. Try again later." }
+  });
+
+  router.post("/forgot-password", resetLimiter, async (request, response, next) => {
+    try {
+      const identity = normalizeIdentity(request.body?.identity);
+      if (!identity || identity.length > 320) return response.status(400).json({ error: "Username or email is required." });
+
+      const user = await getDatabase().collection("users").findOne({
+        active: true,
+        $or: [{ emailNormalized: identity }, { usernameNormalized: identity }]
+      }, { projection: { _id: 1 } });
+      const payload = { message: RESET_RESPONSE };
+      const token = randomBytes(32).toString("base64url");
+      if (user) {
+        const now = new Date();
+        const expiresAt = new Date(now.getTime() + config.passwordResetMinutes * 60 * 1000);
+        const tokens = getDatabase().collection("passwordResetTokens");
+        await tokens.deleteMany({ userId: user._id });
+        await tokens.insertOne({ tokenHash: hashResetToken(token), userId: user._id, createdAt: now, expiresAt });
+      }
+      if (!config.production) {
+        const resetUrl = new URL(config.passwordResetBaseUrl);
+        resetUrl.searchParams.set("resetToken", token);
+        payload.resetUrl = resetUrl.toString();
+      }
+      response.status(202).json(payload);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post("/reset-password", resetLimiter, async (request, response, next) => {
+    try {
+      const token = String(request.body?.token || "");
+      const password = request.body?.password;
+      if (token.length < 32 || token.length > 128) return response.status(400).json({ error: "This password-reset link is invalid or expired." });
+      try {
+        validateNewPassword(password);
+      } catch (error) {
+        return response.status(400).json({ error: error.message });
+      }
+
+      const now = new Date();
+      const reset = await getDatabase().collection("passwordResetTokens").findOneAndDelete({
+        tokenHash: hashResetToken(token),
+        expiresAt: { $gt: now }
+      });
+      if (!reset) return response.status(400).json({ error: "This password-reset link is invalid or expired." });
+
+      const result = await getDatabase().collection("users").updateOne(
+        { _id: reset.userId, active: true },
+        { $set: { passwordHash: await hashPassword(password), failedLoginCount: 0, lockUntil: null, updatedAt: now } }
+      );
+      if (!result.matchedCount) return response.status(400).json({ error: "This password-reset link is invalid or expired." });
+      await Promise.all([
+        getDatabase().collection("sessions").deleteMany({ userId: reset.userId }),
+        getDatabase().collection("passwordResetTokens").deleteMany({ userId: reset.userId })
+      ]);
+      clearSessionCookie(response, config);
+      response.json({ message: "Password updated. Sign in with your new password." });
+    } catch (error) {
+      next(error);
+    }
   });
 
   router.post("/login", loginLimiter, async (request, response, next) => {

@@ -12,7 +12,7 @@ test("rejects invalid credentials and manages a real MongoDB session", { skip: !
   const baseConfig = loadConfig();
   const config = { ...baseConfig, mongoDb: `${baseConfig.mongoDb}_test` };
   const db = await connectDatabase(config);
-  await Promise.all([db.collection("users").deleteMany({}), db.collection("sessions").deleteMany({})]);
+  await Promise.all([db.collection("users").deleteMany({}), db.collection("sessions").deleteMany({}), db.collection("passwordResetTokens").deleteMany({})]);
   const now = new Date();
   await db.collection("users").insertOne({
     email: "owner@example.test",
@@ -59,14 +59,54 @@ test("rejects invalid credentials and manages a real MongoDB session", { skip: !
     assert.equal(me.status, 200);
     assert.equal((await me.json()).user.role, "owner");
 
+    const forgot = await fetch(`${baseUrl}/api/auth/forgot-password`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ identity: "owner@example.test" })
+    });
+    assert.equal(forgot.status, 202);
+    const resetUrl = new URL((await forgot.json()).resetUrl);
+    const resetToken = resetUrl.searchParams.get("resetToken");
+    assert.ok(resetToken);
+
+    const reset = await fetch(`${baseUrl}/api/auth/reset-password`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ token: resetToken, password: "updated-integration-password" })
+    });
+    assert.equal(reset.status, 200);
+
+    const reusedReset = await fetch(`${baseUrl}/api/auth/reset-password`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ token: resetToken, password: "another-integration-password" })
+    });
+    assert.equal(reusedReset.status, 400);
+    const revokedSession = await fetch(`${baseUrl}/api/auth/me`, { headers: { Origin: config.allowedOrigins[0], Cookie: cookieHeader } });
+    assert.equal(revokedSession.status, 401);
+
+    const oldPassword = await fetch(`${baseUrl}/api/auth/login`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ identity: "owner", password: "temporary-integration-password" })
+    });
+    assert.equal(oldPassword.status, 401);
+    const newPassword = await fetch(`${baseUrl}/api/auth/login`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ identity: "owner", password: "updated-integration-password" })
+    });
+    assert.equal(newPassword.status, 200);
+    const newCookieHeader = newPassword.headers.get("set-cookie").split(";", 1)[0];
+
     const logout = await fetch(`${baseUrl}/api/auth/logout`, {
       method: "POST",
-      headers: { ...headers, Cookie: cookieHeader },
+      headers: { ...headers, Cookie: newCookieHeader },
       body: "{}"
     });
     assert.equal(logout.status, 204);
 
-    const afterLogout = await fetch(`${baseUrl}/api/auth/me`, { headers: { Origin: config.allowedOrigins[0], Cookie: cookieHeader } });
+    const afterLogout = await fetch(`${baseUrl}/api/auth/me`, { headers: { Origin: config.allowedOrigins[0], Cookie: newCookieHeader } });
     assert.equal(afterLogout.status, 401);
   } finally {
     await new Promise(resolve => server.close(resolve));

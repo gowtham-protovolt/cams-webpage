@@ -1,6 +1,7 @@
 import mqtt from "mqtt";
 import { parseTelemetryMessage } from "./schema.js";
 import { ingestTelemetry } from "./store.js";
+import { ingestDeviceStatus, parseStatusMessage } from "./status.js";
 
 const status = {
   enabled: false,
@@ -33,8 +34,11 @@ export function startMqtt(config) {
     status.connected = true;
     status.lastError = null;
     try {
-      await client.subscribeAsync(config.mqtt.topic, { qos: 1 });
-      console.log(`CAMS MQTT subscribed to ${config.mqtt.topic}.`);
+      await Promise.all([
+        client.subscribeAsync(config.mqtt.topic, { qos: 1 }),
+        client.subscribeAsync(config.mqtt.statusTopic, { qos: 1 })
+      ]);
+      console.log(`CAMS MQTT subscribed to ${config.mqtt.topic} and ${config.mqtt.statusTopic}.`);
     } catch (error) {
       status.lastError = error.message;
       console.error("CAMS MQTT subscription failed.", error.message);
@@ -48,9 +52,24 @@ export function startMqtt(config) {
   });
   client.on("message", async (topic, payload) => {
     try {
-      const telemetry = parseTelemetryMessage(topic, payload);
-      const result = await ingestTelemetry(telemetry, config.telemetryRetentionDays);
-      if (!result.duplicate) status.lastMessageAt = telemetry.receivedAt.toISOString();
+      if (topic.endsWith("/status")) {
+        const deviceStatus = parseStatusMessage(topic, payload);
+        await ingestDeviceStatus(deviceStatus, config);
+      } else {
+        const telemetry = parseTelemetryMessage(topic, payload);
+        const result = await ingestTelemetry(telemetry, config);
+        if (!result.ignored) {
+          const ackTopic = `cams/${telemetry.series.siteId}/${telemetry.series.machineId}/ack`;
+          await client.publishAsync(ackTopic, JSON.stringify({
+            sequence: telemetry.sequence,
+            stored: true,
+            duplicate: result.duplicate,
+            backfilled: Boolean(result.backfilled),
+            storedAt: new Date().toISOString()
+          }), { qos: 1, retain: false });
+        }
+        if (!result.duplicate && !result.ignored) status.lastMessageAt = telemetry.receivedAt.toISOString();
+      }
     } catch (error) {
       status.lastError = error.message;
       console.warn(`Rejected MQTT message on ${topic}: ${error.message}`);
