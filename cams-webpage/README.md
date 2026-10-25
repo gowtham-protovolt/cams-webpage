@@ -58,6 +58,39 @@ be reviewed separately by qualified personnel.
 
 No application dependencies or build step are required.
 
+## Frontend code structure
+
+Open `CAMS.code-workspace` in VS Code to see the webpage, API, and ESP32
+gateway as separate workspace folders. The browser remains a single-page
+application so authentication and the live MQTT stream are not interrupted
+when an operator changes screens, but every screen now has its own source file:
+
+```text
+cams-webpage/
+├── index.html                 Browser entry point
+├── app.js                     Application controller and event wiring
+├── styles.css                 Shared responsive design system
+├── runtime-config.js          API URL configuration
+└── src/pages/
+    ├── login.js
+    ├── dashboard.js
+    ├── live-data.js
+    ├── machines.js
+    ├── machine-detail.js
+    ├── trends.js
+    ├── alarms.js
+    ├── maintenance.js
+    ├── reports.js
+    ├── users.js
+    ├── settings.js
+    ├── energy.js
+    ├── shared.js              Reusable icons, charts and UI helpers
+    └── index.js               Page-module exports
+```
+
+Each page module only renders its own screen. `app.js` owns shared state,
+authentication, navigation, live telemetry, downloads, and browser events.
+
 ## Installation and setup
 
 Clone the repository and enter the project directory:

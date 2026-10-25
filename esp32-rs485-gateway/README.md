@@ -33,7 +33,9 @@ it must not write PLC registers or replace PLC interlocks and safety logic.
 2. Put the plant Wi-Fi and device-specific MQTT credentials in `secrets.h`.
 3. Confirm the GPIO assignments, PLC serial settings, slave ID, Modbus offsets,
    and DINT word order in `include/config.h`.
-4. Build with `pio run` and upload with `pio run --target upload`.
+4. Build and upload the target matching the physical compressor:
+   `pio run -e cams-01 --target upload`, `pio run -e cams-02 --target upload`,
+   or `pio run -e cams-03 --target upload`.
 5. Open the serial monitor with `pio device monitor`.
 
 The current assumptions are FC04 input-register reads, PV start offset 1535,
@@ -43,7 +45,9 @@ not confirmed production values.
 
 ## MQTT contract
 
-The gateway publishes to `cams/plant-01/CAMS-01/telemetry`. Each payload includes
+The three firmware targets publish to `cams/plant-01/CAMS-01/telemetry`,
+`cams/plant-01/CAMS-02/telemetry`, or `cams/plant-01/CAMS-03/telemetry`.
+Each target has a unique MQTT client ID and broker identity. Each payload includes
 the UTC timestamp, epoch-millisecond sequence, status, raw PV values, PLC error
 codes, converted metrics, calibration version, and per-sensor quality.
 

@@ -1,0 +1,28 @@
+{
+  "folders": [
+    {
+      "name": "CAMS Webpage",
+      "path": "cams-webpage"
+    },
+    {
+      "name": "CAMS API",
+      "path": "cams-api"
+    },
+    {
+      "name": "ESP32 Gateway",
+      "path": "esp32-rs485-gateway"
+    }
+  ],
+  "settings": {
+    "editor.formatOnSave": true,
+    "files.exclude": {
+      "**/.DS_Store": true,
+      "**/node_modules": true,
+      "**/.pio": true
+    },
+    "search.exclude": {
+      "**/node_modules": true,
+      "**/.pio": true
+    }
+  }
+}

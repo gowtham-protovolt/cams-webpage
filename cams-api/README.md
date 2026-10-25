@@ -60,15 +60,15 @@ Open <http://localhost:3100>. Docker should show `CAMS`, `CAMS-MongoDB`, and
 `CAMS-Mosquitto`. The one-time `CAMS-MQTT-Config` container exits successfully
 after creating credentials.
 
-The local broker requires separate backend and device credentials. Its ACL lets
-the device publish only `cams/plant-01/CAMS-01/telemetry` and the matching status
-topic. Port 1884 is available to the protected LAN for ESP32 commissioning.
+The local broker requires separate backend and per-device credentials. Its ACL
+restricts CAMS-01, CAMS-02, and CAMS-03 to their own telemetry and status topics.
+Port 1884 is available to the protected LAN for ESP32 commissioning.
 Production MQTT must use `mqtts://` or `wss://`, unique device identities, and
 secrets stored outside the repository.
 
 Mosquitto is a transient publish/subscribe broker, not a stored-data browser.
 The protected CAMS **Live Data** page provides the requested hierarchy from
-MongoDB as `CAMS → CAMS-01 → date → time → values`. Only payloads declaring
+MongoDB as `CAMS → machine ID → date → time → values`. Only payloads declaring
 `source: esp32-s3-rs485` are accepted.
 
 Every stored telemetry document contains an explicit India-time hierarchy:
@@ -156,11 +156,15 @@ longer works.
 - Authenticated Mosquitto device/backend identities and topic ACL: implemented locally
 - PV1/PV2/PV3, ERR1/ERR2/ERR3, calibration, and quality storage: implemented locally
 - Protected machine/history APIs and live SSE stream: implemented locally
+- Backend health scoring, MQTT Last Will status, stale detection, and persistent alarms: implemented locally
 - Authenticated XLSX and PDF export endpoints: implemented locally
 - Same-origin production container and configuration validation: implemented
 - Owner-only account listing, creation, and enable/disable controls: implemented
 - Production MongoDB and API hosting: not configured
 - Password-reset email and MFA: not implemented
+
+Live status, health, alarm, threshold, and frontend-update behavior is documented
+in [`docs/LIVE-MONITORING.md`](docs/LIVE-MONITORING.md).
 
 ## Known issues and limitations
 
