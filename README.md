@@ -50,6 +50,25 @@ requirements, setup, testing, current status, limitations, and observations.
 MQTT ingestion, protected telemetry APIs, and live dashboard integration are
 implemented locally. Authenticated PDF/XLSX exports are also implemented;
 production deployment remains the final infrastructure step.
+
+## Production hosting
+
+The deployment target is split between:
+
+- GitHub Pages frontend: `https://gowtham-protovolt.github.io/cams-webpage/`
+- Render backend: the HTTPS URL assigned to the `cams-api` service
+- MongoDB Atlas (or another externally reachable MongoDB service)
+- A TLS-enabled public MQTT broker for ESP32 telemetry
+
+Create the Render service from the repository-root `render.yaml`, then add the
+secret `MONGODB_URI`, `MQTT_URL`, `MQTT_USERNAME`, and `MQTT_PASSWORD` values in
+Render. After Render assigns the backend URL, add it as the GitHub Actions
+repository variable `CAMS_API_URL` without a trailing slash. Select **GitHub
+Actions** as the repository's Pages deployment source.
+
+Never commit local `.env` files, MQTT device credentials, certificates, or
+private keys. Rotate any credential that has appeared in a screenshot or an
+older commit before production use.
 The repository now includes a same-origin production container so the API and
 webpage can be deployed together without third-party session cookies.
 Owner-only user administration is implemented for listing accounts, creating

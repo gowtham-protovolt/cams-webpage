@@ -99,14 +99,37 @@ test("rejects invalid credentials and manages a real MongoDB session", { skip: !
     assert.equal(newPassword.status, 200);
     const newCookieHeader = newPassword.headers.get("set-cookie").split(";", 1)[0];
 
-    const logout = await fetch(`${baseUrl}/api/auth/logout`, {
+    const changePassword = await fetch(`${baseUrl}/api/auth/change-password`, {
       method: "POST",
       headers: { ...headers, Cookie: newCookieHeader },
+      body: JSON.stringify({
+        currentPassword: "updated-integration-password",
+        newPassword: "final-integration-password"
+      })
+    });
+    assert.equal(changePassword.status, 200);
+
+    const previousAfterChange = await fetch(`${baseUrl}/api/auth/me`, {
+      headers: { Origin: config.allowedOrigins[0], Cookie: newCookieHeader }
+    });
+    assert.equal(previousAfterChange.status, 401);
+
+    const finalLogin = await fetch(`${baseUrl}/api/auth/login`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ identity: "owner", password: "final-integration-password" })
+    });
+    assert.equal(finalLogin.status, 200);
+    const finalCookieHeader = finalLogin.headers.get("set-cookie").split(";", 1)[0];
+
+    const logout = await fetch(`${baseUrl}/api/auth/logout`, {
+      method: "POST",
+      headers: { ...headers, Cookie: finalCookieHeader },
       body: "{}"
     });
     assert.equal(logout.status, 204);
 
-    const afterLogout = await fetch(`${baseUrl}/api/auth/me`, { headers: { Origin: config.allowedOrigins[0], Cookie: newCookieHeader } });
+    const afterLogout = await fetch(`${baseUrl}/api/auth/me`, { headers: { Origin: config.allowedOrigins[0], Cookie: finalCookieHeader } });
     assert.equal(afterLogout.status, 401);
   } finally {
     await new Promise(resolve => server.close(resolve));

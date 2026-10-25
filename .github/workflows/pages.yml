@@ -4,7 +4,9 @@ on:
   push:
     branches:
       - main
-      - feature/github-pages-hosting
+    paths:
+      - "cams-webpage/**"
+      - ".github/workflows/pages.yml"
   workflow_dispatch:
 
 permissions:
@@ -14,7 +16,7 @@ permissions:
 
 concurrency:
   group: github-pages
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   deploy:
@@ -25,6 +27,24 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Validate Render API URL
+        env:
+          CAMS_API_URL: ${{ vars.CAMS_API_URL }}
+        run: |
+          if [ -z "$CAMS_API_URL" ]; then
+            echo "Repository variable CAMS_API_URL is required."
+            exit 1
+          fi
+
+      - name: Validate CAMS frontend
+        working-directory: cams-webpage
+        run: npm test
 
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5

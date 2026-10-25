@@ -13,3 +13,6 @@ tmp/
 *.pem
 *.key
 *.crt
+.pio/
+cams-api/docker/certs/
+cams-api/docker/devices.txt

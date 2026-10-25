@@ -8,8 +8,8 @@ server-side sessions, login throttling, account lockout, CORS controls, MQTT
 telemetry ingestion, time-series retention, protected telemetry APIs, and an
 authenticated server-sent event stream. Passwords are hashed with Node.js
 `scrypt`; raw passwords and session tokens are never stored in MongoDB.
-It also creates authenticated machine-fleet and telemetry reports as standard
-XLSX workbooks and paginated PDF documents.
+It also provides authenticated machine-fleet XLSX exports and telemetry XLSX
+and paginated PDF exports.
 
 ## Responsible team member
 
@@ -44,6 +44,15 @@ npm run seed-machines
 ```
 
 Remove `CAMS_ADMIN_PASSWORD` from `.env` after the account has been created.
+To create or reset an operator account for local testing, set
+`CAMS_OPERATOR_EMAIL`, `CAMS_OPERATOR_USERNAME`, `CAMS_OPERATOR_DISPLAY_NAME`,
+and `CAMS_OPERATOR_PASSWORD` in the untracked `.env`, then run:
+
+```bash
+npm run create-operator
+```
+
+Remove `CAMS_OPERATOR_PASSWORD` from `.env` after the account has been created.
 Start the API with:
 
 ```bash
@@ -60,15 +69,15 @@ Open <http://localhost:3100>. Docker should show `CAMS`, `CAMS-MongoDB`, and
 `CAMS-Mosquitto`. The one-time `CAMS-MQTT-Config` container exits successfully
 after creating credentials.
 
-The local broker requires separate backend and device credentials. Its ACL lets
-the device publish only `cams/plant-01/CAMS-01/telemetry` and the matching status
-topic. Port 1884 is available to the protected LAN for ESP32 commissioning.
+The local broker requires separate backend and per-device credentials. Its ACL
+restricts CAMS-01, CAMS-02, and CAMS-03 to their own telemetry and status topics.
+Port 1884 is available to the protected LAN for ESP32 commissioning.
 Production MQTT must use `mqtts://` or `wss://`, unique device identities, and
 secrets stored outside the repository.
 
 Mosquitto is a transient publish/subscribe broker, not a stored-data browser.
 The protected CAMS **Live Data** page provides the requested hierarchy from
-MongoDB as `CAMS → CAMS-01 → date → time → values`. Only payloads declaring
+MongoDB as `CAMS → machine ID → date → time → values`. Only payloads declaring
 `source: esp32-s3-rs485` are accepted.
 
 Every stored telemetry document contains an explicit India-time hierarchy:
@@ -156,11 +165,17 @@ longer works.
 - Authenticated Mosquitto device/backend identities and topic ACL: implemented locally
 - PV1/PV2/PV3, ERR1/ERR2/ERR3, calibration, and quality storage: implemented locally
 - Protected machine/history APIs and live SSE stream: implemented locally
+- Backend health scoring, MQTT Last Will status, stale detection, and persistent alarms: implemented locally
 - Authenticated XLSX and PDF export endpoints: implemented locally
+- Authenticated alarm and event history XLSX export: implemented locally
 - Same-origin production container and configuration validation: implemented
-- Owner-only account listing, creation, and enable/disable controls: implemented
+- Owner-only account listing, creation, editing, reversible deletion/restoration,
+  and enable/disable controls: implemented
 - Production MongoDB and API hosting: not configured
 - Password-reset email and MFA: not implemented
+
+Live status, health, alarm, threshold, and frontend-update behavior is documented
+in [`docs/LIVE-MONITORING.md`](docs/LIVE-MONITORING.md).
 
 ## Known issues and limitations
 
@@ -171,8 +186,7 @@ longer works.
 - For reliable production cookies, host the frontend and API under the same
   registered domain or serve the frontend from the API host. Unrelated-domain
   third-party cookies can be blocked by browsers.
-- Password-reset email, MFA, role editing, account deletion, and security audit
-  events are not included yet.
+- Password-reset email, MFA, and security audit events are not included yet.
 - The bundled Mosquitto configuration is authenticated but plaintext; use it
   only on a protected commissioning LAN and never expose port 1884 to the internet.
 - Production TLS certificates and managed broker hosting are not configured.

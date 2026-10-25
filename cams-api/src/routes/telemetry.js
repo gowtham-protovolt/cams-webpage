@@ -7,6 +7,9 @@ import { buildTelemetryTree } from "../telemetry/tree.js";
 import { evaluateMachine } from "../monitoring/health.js";
 import { publicAlarm, publicAuditEntry, recordAlarmAudit } from "../telemetry/alarms.js";
 import { getSiteSettings } from "../settings/service.js";
+import { reconcileMachineTickets, recordMachineTicketActivity } from "../tickets/service.js";
+import { assignDeviceLocations, buildClusterHierarchy } from "../telemetry/hierarchy.js";
+import { ensureLegacyLocations, resolveLocation } from "../telemetry/locations.js";
 
 const MACHINE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const DEVICE_MACHINE_ID = /^CAMS-(?:0[1-9]|[1-9][0-9])$/;
@@ -20,9 +23,11 @@ function requireOwner(request, response, next) {
 function cleanMachineFields(body) {
   const name = String(body?.name || "").trim();
   const zone = String(body?.zone || "").trim();
+  const cluster = body?.cluster === undefined ? undefined : String(body.cluster).trim();
   if (!name || name.length > 80) return { error: "Machine name is required and must not exceed 80 characters." };
-  if (!zone || zone.length > 80) return { error: "Machine area is required and must not exceed 80 characters." };
-  return { name, zone };
+  if ((!zone && !body?.areaId) || zone.length > 80) return { error: "Device area is required and must not exceed 80 characters." };
+  if (cluster !== undefined && (!cluster || cluster.length > 80)) return { error: "Cluster is required and must not exceed 80 characters." };
+  return { name, zone, ...(cluster === undefined ? {} : { cluster }) };
 }
 
 function managedMachine(machine) {
@@ -31,6 +36,9 @@ function managedMachine(machine) {
     siteId: machine.siteId,
     name: machine.name,
     zone: machine.zone,
+    cluster: machine.cluster || "",
+    clusterId: machine.clusterId || null,
+    areaId: machine.areaId || null,
     active: machine.active,
     status: machine.status || "offline",
     createdAt: machine.createdAt || null,
@@ -50,44 +58,80 @@ function cleanAlarmComment(body) {
   return { comment };
 }
 
+async function activeMachineViews(config, siteId) {
+  const db = getDatabase();
+  const sites = siteId ? [siteId] : [...new Set((await db.collection("machines").find({}, { projection: { siteId: 1 } }).toArray()).map(machine => machine.siteId))];
+  for (const id of sites) await ensureLegacyLocations(id);
+  const query = { active: true, ...(siteId ? { siteId } : {}) };
+  const [machines, latest, deviceStatuses] = await Promise.all([
+    db.collection("machines").find(query).sort({ siteId: 1, cluster: 1, zone: 1, machineId: 1 }).toArray(),
+    db.collection("latestTelemetry").find(siteId ? { siteId } : {}).toArray(),
+    db.collection("deviceStatus").find(siteId ? { siteId } : {}).toArray()
+  ]);
+  const latestByMachine = new Map(latest.map(item => [`${item.siteId}/${item.machineId}`, item]));
+  const statusByMachine = new Map(deviceStatuses.map(item => [`${item.siteId}/${item.machineId}`, item]));
+  const siteSettings = new Map();
+  for (const machineSiteId of new Set(machines.map(machine => machine.siteId))) {
+    siteSettings.set(machineSiteId, await getSiteSettings(config, machineSiteId));
+  }
+  const views = machines.map(machine => {
+    const key = `${machine.siteId}/${machine.machineId}`;
+    const telemetry = latestByMachine.get(key) || null;
+    const monitoring = evaluateMachine(telemetry, statusByMachine.get(key), {
+      staleAfterSeconds: siteSettings.get(machine.siteId).sampling.staleAfterSeconds,
+      thresholds: siteSettings.get(machine.siteId).thresholds
+    });
+    return {
+      id: machine.machineId,
+      siteId: machine.siteId,
+      name: machine.name,
+      zone: machine.zone,
+      cluster: machine.cluster || "",
+      clusterId: machine.clusterId,
+      areaId: machine.areaId,
+      status: monitoring.status,
+      lastSeenAt: machine.lastSeenAt || null,
+      telemetry: telemetry ? { ...telemetry, monitoring } : null,
+      monitoring
+    };
+  });
+  const viewsBySite = new Map();
+  for (const view of views) {
+    if (!viewsBySite.has(view.siteId)) viewsBySite.set(view.siteId, []);
+    viewsBySite.get(view.siteId).push(view);
+  }
+  return [...viewsBySite.values()].flatMap(siteViews => assignDeviceLocations(siteViews));
+}
+
+function alarmDate(value) {
+  if (!value) return null;
+  const date = new Date(String(value));
+  return Number.isNaN(date.getTime()) ? undefined : date;
+}
+
+function alarmText(value, maximum = 80) {
+  const text = String(value || "").trim();
+  return text && text.length <= maximum ? text : undefined;
+}
+
 export function telemetryRouter(config) {
   const router = Router();
   router.use(requireAuth);
 
   router.get("/machines", async (_request, response, next) => {
     try {
-      const db = getDatabase();
-      const [machines, latest, deviceStatuses] = await Promise.all([
-        db.collection("machines").find({ active: true }).sort({ siteId: 1, machineId: 1 }).toArray(),
-        db.collection("latestTelemetry").find({}).toArray(),
-        db.collection("deviceStatus").find({}).toArray()
-      ]);
-      const latestByMachine = new Map(latest.map(item => [`${item.siteId}/${item.machineId}`, item]));
-      const statusByMachine = new Map(deviceStatuses.map(item => [`${item.siteId}/${item.machineId}`, item]));
-      const siteSettings = new Map();
-      for (const siteId of new Set(machines.map(machine => machine.siteId))) {
-        siteSettings.set(siteId, await getSiteSettings(config, siteId));
-      }
-      response.json({
-        machines: machines.map(machine => {
-          const key = `${machine.siteId}/${machine.machineId}`;
-          const telemetry = latestByMachine.get(key) || null;
-          const monitoring = evaluateMachine(telemetry, statusByMachine.get(key), {
-            staleAfterSeconds: siteSettings.get(machine.siteId).sampling.staleAfterSeconds,
-            thresholds: siteSettings.get(machine.siteId).thresholds
-          });
-          return {
-            id: machine.machineId,
-            siteId: machine.siteId,
-            name: machine.name,
-            zone: machine.zone,
-            status: monitoring.status,
-            lastSeenAt: machine.lastSeenAt || null,
-            telemetry: telemetry ? { ...telemetry, monitoring } : null,
-            monitoring
-          };
-        })
-      });
+      response.json({ machines: await activeMachineViews(config) });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get("/clusters", async (request, response, next) => {
+    try {
+      const siteId = String(request.query.siteId || "plant-01").trim();
+      if (!MACHINE_ID.test(siteId)) return response.status(400).json({ error: "Invalid site identifier." });
+      const devices = await activeMachineViews(config, siteId);
+      response.json({ siteId, clusters: buildClusterHierarchy(devices) });
     } catch (error) {
       next(error);
     }
@@ -113,14 +157,16 @@ export function telemetryRouter(config) {
       const machineId = String(request.body?.machineId || "").trim().toUpperCase();
       const fields = cleanMachineFields(request.body);
       if (!MACHINE_ID.test(siteId)) return response.status(400).json({ error: "Invalid site identifier." });
-      if (!DEVICE_MACHINE_ID.test(machineId)) return response.status(400).json({ error: "Machine ID must use CAMS-01 through CAMS-99." });
+      if (machineId && !DEVICE_MACHINE_ID.test(machineId)) return response.status(400).json({ error: "Machine ID must use CAMS-01 through CAMS-99." });
       if (fields.error) return response.status(400).json({ error: fields.error });
+      if (!machineId && !fields.cluster && !request.body?.clusterId) return response.status(400).json({ error: "Cluster is required." });
+      const location = await resolveLocation(siteId, request.body);
       const now = new Date();
       const machine = {
         siteId,
         machineId,
-        name: fields.name,
-        zone: fields.zone,
+        ...fields,
+        ...location,
         active: true,
         status: "offline",
         gatewayStatus: "offline",
@@ -128,7 +174,24 @@ export function telemetryRouter(config) {
         updatedAt: now,
         createdBy: request.auth.user.id
       };
-      await getDatabase().collection("machines").insertOne(machine);
+      const collection = getDatabase().collection("machines");
+      if (machineId) {
+        await collection.insertOne(machine);
+      } else {
+        let inserted = false;
+        for (let number = 1; number <= 99; number += 1) {
+          machine.machineId = `CAMS-${String(number).padStart(2, "0")}`;
+          delete machine._id;
+          try {
+            await collection.insertOne(machine);
+            inserted = true;
+            break;
+          } catch (error) {
+            if (!(error instanceof MongoServerError && error.code === 11000)) throw error;
+          }
+        }
+        if (!inserted) return response.status(409).json({ error: "All 99 device IDs are reserved. Restore a removed device or use another site." });
+      }
       const event = managedMachine(machine);
       telemetryEvents.emit("machine-created", event);
       response.status(201).json({ machine: event });
@@ -151,9 +214,13 @@ export function telemetryRouter(config) {
       const fields = cleanMachineFields(request.body);
       if (!DEVICE_MACHINE_ID.test(machineId) || !MACHINE_ID.test(siteId)) return response.status(400).json({ error: "Invalid machine identifier." });
       if (fields.error) return response.status(400).json({ error: fields.error });
+      await ensureLegacyLocations(siteId);
+      const existing = await getDatabase().collection("machines").findOne({ siteId, machineId, active: true });
+      if (!existing) return response.status(404).json({ error: "Active device not found." });
+      const location = await resolveLocation(siteId, request.body, existing);
       const machine = await getDatabase().collection("machines").findOneAndUpdate(
         { siteId, machineId, active: true },
-        { $set: { name: fields.name, zone: fields.zone, updatedAt: new Date(), updatedBy: request.auth.user.id } },
+        { $set: { ...fields, ...location, updatedAt: new Date(), updatedBy: request.auth.user.id } },
         { returnDocument: "after" }
       );
       if (!machine) return response.status(404).json({ error: "Active machine not found." });
@@ -195,6 +262,7 @@ export function telemetryRouter(config) {
         source: "user",
         createdAt: now
       })));
+      await reconcileMachineTickets(siteId, machineId, now);
       const event = managedMachine(machine);
       telemetryEvents.emit("machine-removed", event);
       response.json({ machine: event });
@@ -280,28 +348,66 @@ export function telemetryRouter(config) {
     const sendTelemetry = data => response.write(`event: telemetry\ndata: ${JSON.stringify(data)}\n\n`);
     const sendStatus = data => response.write(`event: machine-status\ndata: ${JSON.stringify(data)}\n\n`);
     const sendAlarm = data => response.write(`event: alarm\ndata: ${JSON.stringify(data)}\n\n`);
+    const sendTicket = data => response.write(`event: ticket\ndata: ${JSON.stringify(data)}\n\n`);
     const machineEventNames = ["machine-created", "machine-updated", "machine-removed", "machine-restored"];
     const machineListeners = new Map(machineEventNames.map(name => [name, data => response.write(`event: ${name}\ndata: ${JSON.stringify(data)}\n\n`)]));
     const heartbeat = setInterval(() => response.write(": heartbeat\n\n"), 20000);
     telemetryEvents.on("telemetry", sendTelemetry);
     telemetryEvents.on("machine-status", sendStatus);
     telemetryEvents.on("alarm", sendAlarm);
+    telemetryEvents.on("ticket", sendTicket);
     for (const [name, listener] of machineListeners) telemetryEvents.on(name, listener);
     request.on("close", () => {
       clearInterval(heartbeat);
       telemetryEvents.off("telemetry", sendTelemetry);
       telemetryEvents.off("machine-status", sendStatus);
       telemetryEvents.off("alarm", sendAlarm);
+      telemetryEvents.off("ticket", sendTicket);
       for (const [name, listener] of machineListeners) telemetryEvents.off(name, listener);
     });
   });
 
   router.get("/alarms", async (request, response, next) => {
     try {
-      const siteId = String(request.query.siteId || "plant-01");
+      const siteId = String(request.query.siteId || "plant-01").trim();
       if (!MACHINE_ID.test(siteId)) return response.status(400).json({ error: "Invalid site identifier." });
-      const alarms = await getDatabase().collection("alarms").find({ siteId }).sort({ lastSeenAt: -1 }).limit(500).toArray();
-      response.json({ alarms: alarms.map(publicAlarm) });
+      const cluster = request.query.cluster === undefined ? "" : alarmText(request.query.cluster);
+      const area = request.query.area === undefined ? "" : alarmText(request.query.area);
+      const machineId = request.query.machineId === undefined ? "" : String(request.query.machineId).trim().toUpperCase();
+      const parameter = request.query.parameter === undefined ? "" : alarmText(request.query.parameter);
+      const severity = request.query.severity === undefined ? "" : String(request.query.severity).trim();
+      const status = request.query.status === undefined ? "" : String(request.query.status).trim();
+      const from = alarmDate(request.query.from);
+      const to = alarmDate(request.query.to);
+      const limit = Math.min(500, Math.max(1, Number.parseInt(request.query.limit || "500", 10) || 500));
+      if (request.query.cluster !== undefined && cluster === undefined) return response.status(400).json({ error: "Invalid cluster filter." });
+      if (request.query.area !== undefined && area === undefined) return response.status(400).json({ error: "Invalid area filter." });
+      if (request.query.machineId !== undefined && !DEVICE_MACHINE_ID.test(machineId)) return response.status(400).json({ error: "Invalid device filter." });
+      if (request.query.parameter !== undefined && parameter === undefined) return response.status(400).json({ error: "Invalid alarm point filter." });
+      if (severity && !new Set(["Critical", "Warning", "Info"]).has(severity)) return response.status(400).json({ error: "Invalid severity filter." });
+      if (status && !new Set(["Active", "Acknowledged", "Resolved"]).has(status)) return response.status(400).json({ error: "Invalid status filter." });
+      if (request.query.from !== undefined && from === undefined) return response.status(400).json({ error: "Invalid From date." });
+      if (request.query.to !== undefined && to === undefined) return response.status(400).json({ error: "Invalid To date." });
+      if (from && to && from > to) return response.status(400).json({ error: "From date must be before To date." });
+
+      const query = {
+        siteId,
+        ...(machineId ? { machineId } : {}),
+        ...(parameter ? { parameter } : {}),
+        ...(severity ? { severity } : {}),
+        ...(status ? { status } : {}),
+        ...((from || to) ? { lastSeenAt: { ...(from ? { $gte: from } : {}), ...(to ? { $lte: to } : {}) } } : {})
+      };
+      if (cluster || area) {
+        const devices = await activeMachineViews(config, siteId);
+        const matchingIds = devices
+          .filter(device => (!cluster || device.cluster === cluster) && (!area || device.zone === area))
+          .map(device => device.id);
+        if (machineId && !matchingIds.includes(machineId)) return response.json({ alarms: [], filters: { siteId, cluster, area, machineId, parameter, severity, status, from, to } });
+        if (!machineId) query.machineId = { $in: matchingIds };
+      }
+      const alarms = await getDatabase().collection("alarms").find(query).sort({ lastSeenAt: -1 }).limit(limit).toArray();
+      response.json({ alarms: alarms.map(publicAlarm), filters: { siteId, cluster, area, machineId, parameter, severity, status, from, to, limit } });
     } catch (error) { next(error); }
   });
 
@@ -350,8 +456,15 @@ export function telemetryRouter(config) {
         source: "user",
         createdAt: now
       });
+      await recordMachineTicketActivity(alarm.siteId, alarm.machineId, {
+        action: status === "Acknowledged" ? "Alarm acknowledged" : "Alarm resolved",
+        actor: request.auth.user,
+        details: `Alarm: ${alarm.parameter} · ${alarm.message}`,
+        at: now
+      });
       const event = publicAlarm(alarm);
       telemetryEvents.emit("alarm", event);
+      await reconcileMachineTickets(alarm.siteId, alarm.machineId, now);
       response.json({ alarm: event, audit });
     } catch (error) { next(error); }
   });

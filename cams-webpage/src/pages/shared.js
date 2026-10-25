@@ -30,6 +30,13 @@ const iconPaths = {
 
 export const icon = (name, className = "") => `<svg class="${className}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${iconPaths[name] || iconPaths.info}</svg>`;
 
+export function downloadMenu(buttons, { label = "Download", buttonClass = "icon-btn", showLabel = false } = {}) {
+  return `<details class="download-menu">
+    <summary class="${buttonClass}" aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}">${icon("download")}${showLabel ? `<span>${escapeHtml(label)}</span>` : ""}</summary>
+    <div class="download-menu-options">${buttons.map(({ id, label: optionLabel, format }) => `<button class="download-menu-option" id="${escapeHtml(id)}" type="button">${icon(format === "pdf" ? "report" : "download")}${escapeHtml(optionLabel)}</button>`).join("")}</div>
+  </details>`;
+}
+
 export function statusPill(status) {
   return `<span class="status-pill status-${String(status).toLowerCase()}">${status}</span>`;
 }
@@ -38,12 +45,126 @@ export function fmt(value, unit = "") {
   return value === null || value === undefined ? "—" : `${Number(value).toFixed(value % 1 ? 1 : 0)}${unit ? ` ${unit}` : ""}`;
 }
 
+export function formatDate(value) {
+  if (!value) return "—";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "—" : date.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+}
+
+export function connectionStatus(machine) {
+  return machine.status !== "Offline" && machine.gatewayStatus !== "Offline" ? "Online" : "Offline";
+}
+
+export function telemetryUpdateTime(value, { live = false } = {}) {
+  const receivedAt = value ? new Date(value) : null;
+  if (!receivedAt || Number.isNaN(receivedAt.getTime())) return "No telemetry";
+  if (live) {
+    const elapsedSeconds = Math.max(0, Math.floor((Date.now() - receivedAt.getTime()) / 1000));
+    if (elapsedSeconds < 60) return `Live · ${elapsedSeconds}s ago`;
+    const elapsedMinutes = Math.floor(elapsedSeconds / 60);
+    if (elapsedMinutes < 60) return `Live · ${elapsedMinutes}m ago`;
+    return `Live · ${Math.floor(elapsedMinutes / 60)}h ago`;
+  }
+  const includeYear = receivedAt.getFullYear() !== new Date().getFullYear();
+  const date = receivedAt.toLocaleDateString("en-IN", {
+    day: "2-digit",
+    month: "short",
+    ...(includeYear ? { year: "numeric" } : {}),
+  });
+  const time = receivedAt.toLocaleTimeString("en-IN", {
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  }).replace(/\b(am|pm)\b/gi, value => value.toUpperCase());
+  return `${date} · ${time}`;
+}
+
+export function connectionStatusDisplay(machine) {
+  const online = connectionStatus(machine) === "Online";
+  return `<span class="updated-note ${online ? "live" : "not-live"}"><i class="pulse-dot"></i>${online ? "Online" : "Offline"}</span>`;
+}
+
+export function connectionLastUpdate(machine) {
+  return telemetryUpdateTime(machine.receivedAt, { live: connectionStatus(machine) === "Online" });
+}
+
+export function customDatePicker(state, id, value, label) {
+  const selectedDate = /^\d{4}-\d{2}-\d{2}$/.test(value || "") ? value : "";
+  const monthValue = state.customDatePickerMonth || selectedDate || new Date().toISOString().slice(0, 10);
+  const [year, month] = monthValue.split("-").map(Number);
+  const firstDay = new Date(year, month - 1, 1);
+  const startOffset = (firstDay.getDay() + 6) % 7;
+  const daysInMonth = new Date(year, month, 0).getDate();
+  const monthLabel = firstDay.toLocaleDateString("en-IN", { month: "long", year: "numeric" });
+  const weekdays = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    .map(day => `<span class="custom-calendar-weekday">${day}</span>`)
+    .join("");
+  const todayValue = new Date();
+  const today = `${todayValue.getFullYear()}-${String(todayValue.getMonth() + 1).padStart(2, "0")}-${String(todayValue.getDate()).padStart(2, "0")}`;
+  const days = Array.from({ length: 42 }, (_, index) => {
+    const day = index - startOffset + 1;
+    if (day < 1 || day > daysInMonth) return `<span class="custom-calendar-empty" aria-hidden="true"></span>`;
+    const date = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+    const isToday = date === today;
+    const selected = date === selectedDate;
+    return `<button class="custom-calendar-day${isToday ? " today" : ""}${selected ? " selected" : ""}" type="button" data-custom-date-select="${date}" aria-label="${new Date(year, month - 1, day).toLocaleDateString("en-IN", { dateStyle: "full" })}" ${selected ? 'aria-pressed="true"' : ""}>${day}</button>`;
+  }).join("");
+  const selectingMonth = state.customDatePickerSelecting === id;
+  const monthSelector = selectingMonth
+    ? `<div class="custom-calendar-month-select">
+        <label><span>Month</span>${customSelect("custom-date-month", Array.from({ length: 12 }, (_, index) => [String(index + 1), new Date(2000, index, 1).toLocaleDateString("en-IN", { month: "long" })]), String(month), { nativeData: 'data-custom-date-part="month"', ariaLabel: "Select month" })}</label>
+        <label><span>Year</span>${customSelect("custom-date-year", Array.from({ length: 22 }, (_, index) => { const optionYear = year - 10 + index; return [String(optionYear), String(optionYear)]; }), String(year), { nativeData: 'data-custom-date-part="year"', ariaLabel: "Select year" })}</label>
+        <button type="button" class="custom-calendar-done" data-custom-date-done>Done</button>
+      </div>`
+    : `<div class="custom-calendar-grid">${weekdays}${days}</div>`;
+  const calendar = state.customDatePicker === id
+    ? `<div class="custom-calendar" role="group" aria-label="${escapeHtml(label)} calendar">
+        <div class="custom-calendar-head"><button class="custom-calendar-month-year" type="button" data-custom-date-month-year aria-expanded="${selectingMonth}">${escapeHtml(monthLabel)}</button></div>
+        ${monthSelector}
+      </div>`
+    : "";
+  return `<div class="custom-date-picker" data-custom-date-picker="${id}">
+    <button class="custom-date-field" id="${id}" type="button" data-custom-date-toggle aria-haspopup="true" aria-expanded="${state.customDatePicker === id}" aria-label="${escapeHtml(label)}">
+      <span>${selectedDate ? `${selectedDate.slice(8, 10)}/${selectedDate.slice(5, 7)}/${selectedDate.slice(0, 4)}` : "Select date"}</span>${icon("calendar")}
+    </button>${calendar}
+  </div>`;
+}
+
+export function customSelect(id, options, selectedValue, { className = "", label = "Options", ariaLabel, nativeData = "" } = {}) {
+  const nativeOptions = options.map(([value, text]) => `<option value="${escapeHtml(value)}" ${value === selectedValue ? "selected" : ""}>${escapeHtml(text)}</option>`).join("");
+  const choices = options.map(([value, text]) => `<button class="custom-select-option time-range-option" type="button" role="option" data-custom-select-option="${escapeHtml(value)}" aria-selected="${value === selectedValue}" tabindex="-1">${escapeHtml(text)}</button>`).join("");
+  const selectedLabel = options.find(([value]) => value === selectedValue)?.[1] || options[0]?.[1] || "";
+  return `<div class="select-wrap custom-select ${className}" data-custom-select>
+    <select id="${escapeHtml(id)}" class="custom-select-native time-range-native" ${nativeData} aria-hidden="true" tabindex="-1">${nativeOptions}</select>
+    <button class="custom-select-trigger time-range-trigger" id="${escapeHtml(id)}-trigger" type="button" role="combobox" data-custom-select-trigger aria-haspopup="listbox" aria-expanded="false" aria-controls="${escapeHtml(id)}-options" ${ariaLabel ? `aria-label="${escapeHtml(ariaLabel)}"` : ""}>
+      <span>${escapeHtml(selectedLabel)}</span>${icon("chevronDown")}
+    </button>
+    <div class="custom-select-menu time-range-menu" id="${escapeHtml(id)}-options" role="listbox" aria-label="${escapeHtml(label)}" hidden>${choices}</div>
+  </div>`;
+}
+
+export function timeRangeSelect(id, ranges, selectedValue) {
+  return customSelect(id, ranges, selectedValue, { className: "time-range-select", label: "Time range" });
+}
+
 export function initials(name = "Plant Owner") {
   return name.split(/\s+/).filter(Boolean).slice(0, 2).map(part => part[0]).join("").toUpperCase() || "PO";
 }
 
 export function escapeHtml(value = "") {
   return String(value).replace(/[&<>'"]/g, character => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[character]));
+}
+
+export function deviceDisplayName(machine = {}) {
+  const id = String(machine.id || machine.machineId || "").trim();
+  const name = String(machine.name || machine.machineName || "").trim();
+  return name && name !== id ? name : id;
+}
+
+export function deviceLabel(machine = {}) {
+  const id = String(machine.id || machine.machineId || "").trim();
+  const name = deviceDisplayName(machine);
+  return id && name && name !== id ? `${name} (${id})` : name || id;
 }
 
 export function relativeTime(value) {
@@ -61,7 +182,7 @@ export function relativeTime(value) {
 }
 
 export function pageHead(title, subtitle, actions = "") {
-  return `<div class="page-head"><div><h1>${title}</h1><p>${subtitle}</p></div>${actions ? `<div class="page-actions">${actions}</div>` : ""}</div>`;
+  return `<div class="page-head"><div><h1>${title}</h1>${subtitle ? `<p>${subtitle}</p>` : ""}</div>${actions ? `<div class="page-actions">${actions}</div>` : ""}</div>`;
 }
 
 export const parameterConfig = {
@@ -107,8 +228,11 @@ export function chartSvg(parameter = "Pressure", readings = []) {
   return `<svg viewBox="0 0 700 228" preserveAspectRatio="none" role="img" aria-label="${parameter} trend chart"><defs><linearGradient id="chartFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#42b7a4" stop-opacity=".34"/><stop offset="100%" stop-color="#42b7a4" stop-opacity=".02"/></linearGradient></defs>${grid}<polygon class="chart-area" points="${areaPoints}"/><polyline class="chart-line" points="${points}"/><circle class="chart-point" cx="${lastX}" cy="${lastY}" r="4"/>${times}<text class="chart-label" x="3" y="12">${config.unit}</text></svg>`;
 }
 
-export function kpi(label, value, note, iconName, tone) {
-  return `<article class="kpi-card"><div class="kpi-top"><span class="kpi-label">${label}</span><span class="kpi-icon ${tone}">${icon(iconName)}</span></div><div class="kpi-value"><strong>${value}</strong><span>${note}</span></div></article>`;
+export function kpi(label, value, note, iconName, tone, options = {}) {
+  const interactive = options.filter
+    ? ` role="link" tabindex="0" data-dashboard-kpi="${escapeHtml(options.filter)}" aria-label="Open ${escapeHtml(label.toLowerCase())}"`
+    : "";
+  return `<article class="kpi-card${options.filter ? " is-clickable" : ""}"${interactive}><div class="kpi-top"><span class="kpi-label">${escapeHtml(label)}</span><span class="kpi-icon ${tone}">${icon(iconName)}</span></div><div class="kpi-value"><strong>${value}</strong><span>${escapeHtml(note)}</span></div>${options.filter ? `<span class="kpi-action">${escapeHtml(options.actionLabel || "View devices")} ${icon("chevronRight")}</span>` : ""}</article>`;
 }
 
 export function phasePage(title, tag, headline, description, features) {

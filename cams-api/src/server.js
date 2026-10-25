@@ -3,12 +3,14 @@ import { loadConfig } from "./config.js";
 import { closeDatabase, connectDatabase } from "./db.js";
 import { startMqtt, stopMqtt } from "./telemetry/mqtt.js";
 import { startStaleMonitor, stopStaleMonitor } from "./telemetry/status.js";
+import { startTicketMonitor, stopTicketMonitor } from "./tickets/scheduler.js";
 
 const config = loadConfig();
 await connectDatabase(config);
 const app = createApp(config);
 const mqttClient = startMqtt(config);
 const staleMonitor = startStaleMonitor(config);
+const ticketMonitor = startTicketMonitor();
 const server = app.listen(config.port, "0.0.0.0", () => {
   console.log(`CAMS API listening on port ${config.port}.`);
 });
@@ -18,6 +20,7 @@ async function shutdown(signal) {
   server.close(async () => {
     await stopMqtt(mqttClient);
     stopStaleMonitor(staleMonitor);
+    stopTicketMonitor(ticketMonitor);
     await closeDatabase();
     process.exit(0);
   });

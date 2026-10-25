@@ -72,7 +72,7 @@ test("owners manage machines while deletion preserves history and blocks MQTT un
 
     const created = await fetch(`${baseUrl}/api/machines`, {
       method: "POST", headers: { ...jsonHeaders, Cookie: ownerCookie },
-      body: JSON.stringify({ siteId: "plant-01", machineId: "CAMS-17", name: "Compressor 17", zone: "Line B" })
+      body: JSON.stringify({ siteId: "plant-01", machineId: "CAMS-17", name: "Compressor 17", cluster: "Cluster 04", zone: "Area 01" })
     });
     assert.equal(created.status, 201);
     assert.equal((await created.json()).machine.status, "offline");
@@ -91,10 +91,82 @@ test("owners manage machines while deletion preserves history and blocks MQTT un
 
     const updated = await fetch(`${baseUrl}/api/machines/CAMS-17?siteId=plant-01`, {
       method: "PATCH", headers: { ...jsonHeaders, Cookie: ownerCookie },
-      body: JSON.stringify({ name: "Main Compressor 17", zone: "Utility Room" })
+      body: JSON.stringify({ name: "Main Compressor 17", zone: "Area 01" })
     });
     assert.equal(updated.status, 200);
-    assert.equal((await updated.json()).machine.zone, "Utility Room");
+    assert.equal((await updated.json()).machine.zone, "Area 01");
+
+    const clusterResponse = await fetch(`${baseUrl}/api/clusters?siteId=plant-01`, { headers: { Origin: origin, Cookie: ownerCookie } });
+    assert.equal(clusterResponse.status, 200);
+    const clusterPayload = await clusterResponse.json();
+    assert.equal(clusterPayload.clusters[0].name, "Cluster 04");
+    assert.equal(clusterPayload.clusters[0].areas[0].name, "Area 01");
+    assert.equal(clusterPayload.clusters[0].areas[0].devices[0].id, "CAMS-17");
+
+    await db.collection("alarms").insertMany([
+      {
+        _id: "plant-01/CAMS-17/high-pressure", siteId: "plant-01", machineId: "CAMS-17",
+        code: "high-pressure", parameter: "Pressure", severity: "Critical", value: 8.1,
+        message: "Pressure is above the configured operating range.", status: "Active",
+        firstSeenAt: now, lastSeenAt: now, acknowledgedAt: null, resolvedAt: null
+      },
+      {
+        _id: "plant-01/CAMS-17/low-flow", siteId: "plant-01", machineId: "CAMS-17",
+        code: "low-flow", parameter: "Flow", severity: "Warning", value: 19,
+        message: "Flow is below the configured operating range.", status: "Acknowledged",
+        firstSeenAt: now, lastSeenAt: now, acknowledgedAt: now, resolvedAt: null
+      }
+    ]);
+    const alarmFilters = new URLSearchParams({
+      siteId: "plant-01", cluster: "Cluster 04", area: "Area 01", machineId: "CAMS-17",
+      parameter: "Pressure", severity: "Critical", status: "Active"
+    });
+    const filteredAlarms = await fetch(`${baseUrl}/api/alarms?${alarmFilters}`, { headers: { Origin: origin, Cookie: ownerCookie } });
+    assert.equal(filteredAlarms.status, 200);
+    assert.deepEqual((await filteredAlarms.json()).alarms.map(alarm => alarm.code), ["high-pressure"]);
+    const wrongArea = await fetch(`${baseUrl}/api/alarms?siteId=plant-01&cluster=Cluster%2004&area=Area%2002`, { headers: { Origin: origin, Cookie: ownerCookie } });
+    assert.equal(wrongArea.status, 200);
+    assert.equal((await wrongArea.json()).alarms.length, 0);
+
+    const locationRequest = async (path, method = "GET", body, cookie = ownerCookie) => {
+      const result = await fetch(`${baseUrl}/api/locations${path}`, {
+        method, headers: { ...jsonHeaders, Cookie: cookie }, ...(body ? { body: JSON.stringify(body) } : {})
+      });
+      return { status: result.status, body: await result.json() };
+    };
+    assert.equal((await locationRequest("/clusters", "POST", { name: "Denied" }, viewerCookie)).status, 403);
+    const newCluster = await locationRequest("/clusters", "POST", { name: "Test Cluster 10" });
+    assert.equal(newCluster.status, 201);
+    assert.equal((await locationRequest("/clusters", "POST", { name: "test cluster 10" })).status, 409);
+    const newArea = await locationRequest("/areas", "POST", { name: "Test Area", clusterId: newCluster.body.id });
+    assert.equal(newArea.status, 201);
+    const locations = (await locationRequest("")).body.clusters;
+    const oldCluster = locations.find(c => c.name === "Cluster 04");
+    const oldArea = oldCluster.areas.find(a => a.name === "Area 01");
+    assert.equal((await locationRequest("/assign", "POST", { clusterId: oldCluster.id, areaId: newArea.body.id, deviceIds: ["CAMS-17"] })).status, 400);
+    assert.equal((await locationRequest("/assign", "POST", { clusterId: newCluster.body.id, areaId: newArea.body.id, deviceIds: ["CAMS-17"] })).status, 200);
+    assert.equal((await locationRequest(`/areas/${newArea.body.id}`, "DELETE")).status, 409);
+    assert.equal((await locationRequest(`/clusters/${newCluster.body.id}`, "PATCH", { name: "Test Cluster 11" })).status, 200);
+    const moved = await db.collection("machines").findOne({ siteId: "plant-01", machineId: "CAMS-17" });
+    assert.equal(moved.clusterId, newCluster.body.id);
+    assert.equal(moved.cluster, "Test Cluster 11");
+    assert.equal(moved.areaId, newArea.body.id);
+    assert.equal((await locationRequest(`/areas/${newArea.body.id}`, "PATCH", { name: "Renamed Area" })).status, 200);
+    assert.equal((await db.collection("machines").findOne({ siteId: "plant-01", machineId: "CAMS-17" })).zone, "Renamed Area");
+    assert.equal((await locationRequest("/assign", "POST", { clusterId: oldCluster.id, areaId: oldArea.id, deviceIds: ["CAMS-17"] })).status, 200);
+    assert.equal((await locationRequest(`/clusters/${newCluster.body.id}`, "DELETE")).status, 409);
+    assert.equal((await locationRequest(`/areas/${newArea.body.id}`, "DELETE")).status, 200);
+    assert.equal((await locationRequest(`/clusters/${newCluster.body.id}`, "DELETE")).status, 200);
+
+    await db.collection("machines").insertOne({ siteId: "legacy-test", machineId: "CAMS-01", name: "Legacy", zone: "Spinning", active: true });
+    const legacy = (await locationRequest("?siteId=legacy-test")).body.clusters;
+    assert.equal(legacy[0].areas[0].name, "Spinning");
+    const legacyDevice = await db.collection("machines").findOne({ siteId: "legacy-test" });
+    assert.equal(typeof legacyDevice.clusterId, "string");
+    await db.collection("machines").insertOne({ siteId: "legacy-test", machineId: "CAMS-99", name: "Later device", active: true });
+    await locationRequest("?siteId=legacy-test");
+    assert.equal((await db.collection("machines").findOne({ siteId: "legacy-test", machineId: "CAMS-01" })).clusterId, legacyDevice.clusterId);
+    await db.collection("machines").deleteMany({ siteId: "legacy-test" });
 
     const firstReading = telemetry("CAMS-17", 17001, now);
     assert.equal((await ingestTelemetry(firstReading, config)).ignored, undefined);

@@ -1,4 +1,4 @@
-import { escapeHtml, historyFor, icon, pageHead, parameterConfig } from "./shared.js";
+import { customDatePicker, customSelect, deviceLabel, downloadMenu, escapeHtml, historyFor, icon, pageHead, parameterConfig, timeRangeSelect } from "./shared.js";
 
 const operatingRanges = {
   Pressure: { minimum: 6.8, maximum: 7.5 },
@@ -104,7 +104,7 @@ export function connectedProcessChart(machine, readings, parameter) {
       </svg>
       <div class="process-tooltip" id="process-tooltip" role="status" aria-live="polite">
         <div class="process-tooltip-time" data-tooltip-time>—</div>
-        <strong>${escapeHtml(machine.id)}</strong>
+        <strong>${escapeHtml(deviceLabel(machine))}</strong>
         <dl><div><dt>Pressure</dt><dd><span data-tooltip-pressure>—</span> bar</dd></div><div><dt>Flow</dt><dd><span data-tooltip-flow>—</span> L/min</dd></div><div><dt>Suction</dt><dd><span data-tooltip-suction>—</span> kPa</dd></div></dl>
         <div class="process-tooltip-meta"><span data-tooltip-status>—</span><span data-tooltip-quality>—</span></div>
       </div>
@@ -118,7 +118,7 @@ export function trendStat(label, value, unit) {
 
 export function renderTrendsPage({ state, machines, machineHistory }) {
   const machine = machines.find(item => item.id === state.trendMachine) || machines[0];
-  if (!machine) return `${pageHead("Trends & analytics", "No machine telemetry is available")}<div class="empty-state">${icon("trend")}Publish telemetry to begin charting.</div>`;
+  if (!machine) return `${pageHead("Trends & analytics", "No device telemetry is available")}<div class="empty-state">${icon("trend")}Publish telemetry to begin charting.</div>`;
   const history = historyFor(machineHistory, machine.id, state.trendParameter);
   const values = history.map(point => point.value);
   const current = values.at(-1) ?? null;
@@ -127,12 +127,13 @@ export function renderTrendsPage({ state, machines, machineHistory }) {
   const average = values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
   const unit = (parameterConfig[state.trendParameter] || parameterConfig.Pressure).unit;
   const rawReadings = machineHistory.get(machine.id) || [];
-  const selects = machines.map(item => `<option value="${item.id}" ${item.id === state.trendMachine ? "selected" : ""}>${item.id} · ${item.name}</option>`).join("");
-  const parameters = ["Pressure", "Flow", "Suction"].map(parameter => `<option value="${parameter}" ${parameter === state.trendParameter ? "selected" : ""}>${parameter}</option>`).join("");
-  const ranges = ["15m", "1h", "6h", "24h", "7d", "Custom"].map(range => `<button class="${state.trendRange === range ? "active" : ""}" data-range="${range}">${range}</button>`).join("");
-  return `${pageHead("Trends & analytics", "Explore live and historical operating parameters", `<button class="secondary-btn" id="export-trend-pdf">${icon("report")} PDF</button><button class="secondary-btn" id="export-trend-xlsx">${icon("download")} Excel</button>`)}
-    <section class="trend-controls"><div class="control-group grow"><label>Machine</label><div class="select-wrap"><select id="trend-machine">${selects}</select>${icon("chevronDown")}</div></div><div class="control-group"><label>Parameter</label><div class="select-wrap"><select id="trend-parameter">${parameters}</select>${icon("chevronDown")}</div></div><div class="control-group grow"><label>Time range</label><div class="range-pills">${ranges}</div></div></section>
-    <article class="panel"><header class="panel-head"><div class="panel-title"><h2>${state.trendParameter} history</h2><p>${machine.id} · ${state.trendRange === "Custom" ? "custom range preview" : `last ${state.trendRange}`}</p></div><span class="updated-note"><i class="pulse-dot"></i>Live sampling</span></header>
+  const selects = machines.map(item => [item.id, deviceLabel(item)]);
+  const parameters = ["Pressure", "Flow", "Suction"].map(parameter => [parameter, parameter]);
+  const ranges = [["15m", "15 min"], ["1h", "1 hr"], ["6h", "6 hr"], ["24h", "1 day"], ["7d", "1 week"], ["1mo", "1 month"], ["3mo", "3 months"], ["6mo", "6 months"], ["1y", "1 year"], ["custom", "Custom"]];
+  const customDate = state.trendRange === "custom" ? customDatePicker(state, "trend-custom-date", state.trendCustomDate, "Choose trend date") : "";
+  return `${pageHead("Trends & analytics", "Explore live and historical operating parameters", downloadMenu([{ id: "export-trend-pdf", label: "PDF", format: "pdf" }, { id: "export-trend-xlsx", label: "Excel", format: "xlsx" }]))}
+    <section class="trend-controls"><div class="control-group grow"><label for="trend-machine-trigger">Device</label>${customSelect("trend-machine", selects, state.trendMachine, { label: "Device" })}</div><div class="control-group"><label for="trend-parameter-trigger">Parameter</label>${customSelect("trend-parameter", parameters, state.trendParameter, { label: "Parameter" })}</div><div class="control-group grow"><label for="trend-range-trigger">Time range</label>${timeRangeSelect("trend-range", ranges, state.trendRange)}${customDate}</div></section>
+    <article class="panel"><header class="panel-head"><div class="panel-title"><h2>${state.trendParameter} history</h2><p>${escapeHtml(deviceLabel(machine))} · ${state.trendRange === "Custom" ? "custom range preview" : `last ${state.trendRange}`}</p></div><span class="updated-note"><i class="pulse-dot"></i>Live sampling</span></header>
       <div class="panel-body process-panel-body">${connectedProcessChart(machine, rawReadings, state.trendParameter)}</div><div class="trend-stat-grid">${trendStat("Current", current, unit)}${trendStat("Minimum", minimum, unit)}${trendStat("Maximum", maximum, unit)}${trendStat("Average", average, unit)}</div>
     </article>`;
 }

@@ -2,17 +2,17 @@ import { closeDatabase, connectDatabase } from "../src/db.js";
 import { loadConfig } from "../src/config.js";
 
 const inventory = [
-  ["CAMS-01", "Compressor 01", "Spinning · Line A"]
+  ["CAMS-01", "Compressor 01", "Cluster 01", "Area 01"]
 ];
 
 const config = loadConfig();
 const db = await connectDatabase(config);
 const now = new Date();
-await db.collection("machines").bulkWrite(inventory.map(([machineId, name, zone]) => ({
+await db.collection("machines").bulkWrite(inventory.map(([machineId, name, cluster, zone]) => ({
   updateOne: {
     filter: { siteId: "plant-01", machineId },
     update: {
-      $set: { name, zone, active: true, updatedAt: now },
+      $set: { name, cluster, zone, active: true, updatedAt: now },
       $setOnInsert: { status: "offline", createdAt: now }
     },
     upsert: true

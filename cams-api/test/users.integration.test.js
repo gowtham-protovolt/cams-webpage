@@ -74,6 +74,21 @@ test("allows only owners to list, create, and disable CAMS users", { skip: !hasD
 
     const operatorLogin = await login(baseUrl, origin, "plant.operator", "temporary-operator-password");
     assert.equal(operatorLogin.response.status, 200);
+    const changedOperator = await fetch(`${baseUrl}/api/admin/users/${createdUser.id}`, {
+      method: "PATCH",
+      headers: { ...jsonHeaders, Cookie: ownerLogin.cookie },
+      body: JSON.stringify({
+        displayName: "Plant Operator", username: "plant.operator", email: "operator@example.test",
+        role: "operator", changePassword: true, password: "updated-operator-password"
+      })
+    });
+    assert.equal(changedOperator.status, 200);
+    const storedUpdatedUser = await db.collection("users").findOne({ _id: storedUser._id });
+    assert.notEqual(storedUpdatedUser.passwordHash, storedUser.passwordHash);
+    assert.equal(storedUpdatedUser.failedLoginCount, 0);
+    assert.equal(storedUpdatedUser.lockUntil, null);
+    assert.equal((await fetch(`${baseUrl}/api/auth/me`, { headers: { Origin: origin, Cookie: operatorLogin.cookie } })).status, 401);
+    assert.equal((await login(baseUrl, origin, "plant.operator", "updated-operator-password")).response.status, 200);
     const disabled = await fetch(`${baseUrl}/api/admin/users/${createdUser.id}/status`, {
       method: "PATCH",
       headers: { ...jsonHeaders, Cookie: ownerLogin.cookie },

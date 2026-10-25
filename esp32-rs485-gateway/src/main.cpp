@@ -7,12 +7,21 @@
 #include <time.h>
 
 #include "config.h"
+#include "offline_queue.h"
 #include "secrets.h"
+
+#ifndef CAMS_MQTT_USERNAME
+#define CAMS_MQTT_USERNAME MQTT_USERNAME_CAMS_01
+#endif
+#ifndef CAMS_MQTT_PASSWORD
+#define CAMS_MQTT_PASSWORD MQTT_PASSWORD_CAMS_01
+#endif
 
 HardwareSerial plcSerial(2);
 ModbusMaster plc;
 WiFiClient networkClient;
 MQTTClient mqttClient(1536);
+OfflineTelemetryQueue telemetryQueue;
 
 struct PlcSample {
   int32_t pv1;
@@ -26,6 +35,10 @@ struct PlcSample {
 uint32_t nextSampleAt = 0;
 uint32_t lastWifiAttempt = 0;
 uint32_t lastMqttAttempt = 0;
+uint32_t lastBufferSendAttempt = 0;
+uint32_t bufferPublishStartedAt = 0;
+bool awaitingStorageAck = false;
+uint64_t inFlightSequence = 0;
 
 void enableRs485Transmit() {
   digitalWrite(PLC_DE_RE_PIN, HIGH);
@@ -104,6 +117,24 @@ bool currentUtc(char *buffer, size_t size, uint64_t &epochMilliseconds) {
   return true;
 }
 
+void formatUtc(uint64_t epochMilliseconds, char *buffer, size_t size) {
+  const time_t seconds = static_cast<time_t>(epochMilliseconds / 1000ULL);
+  tm utc{};
+  gmtime_r(&seconds, &utc);
+  snprintf(
+    buffer,
+    size,
+    "%04d-%02d-%02dT%02d:%02d:%02d.%03lluZ",
+    utc.tm_year + 1900,
+    utc.tm_mon + 1,
+    utc.tm_mday,
+    utc.tm_hour,
+    utc.tm_min,
+    utc.tm_sec,
+    epochMilliseconds % 1000ULL
+  );
+}
+
 void connectWifi() {
   if (WiFi.status() == WL_CONNECTED) return;
   const uint32_t now = millis();
@@ -119,41 +150,44 @@ void connectMqtt() {
   if (now - lastMqttAttempt < MQTT_RETRY_MS) return;
   lastMqttAttempt = now;
   Serial.println("[mqtt] connecting");
-  if (mqttClient.connect(MQTT_CLIENT_ID, MQTT_USERNAME, MQTT_PASSWORD)) {
-    mqttClient.publish(STATUS_TOPIC, "{\"status\":\"online\"}", true, 1);
+  if (mqttClient.connect(MQTT_CLIENT_ID, CAMS_MQTT_USERNAME, CAMS_MQTT_PASSWORD)) {
+    mqttClient.subscribe(ACK_TOPIC, 1);
+    mqttClient.publish(STATUS_TOPIC, ONLINE_STATUS_PAYLOAD, true, 1);
+    awaitingStorageAck = false;
     Serial.println("[mqtt] connected");
   }
 }
 
-bool publishSample(const PlcSample &sample) {
+bool publishRecord(const BufferedTelemetryRecord &record) {
   char timestamp[32];
-  uint64_t sequence = 0;
-  if (!currentUtc(timestamp, sizeof(timestamp), sequence)) {
-    Serial.println("[time] waiting for NTP synchronization");
-    return false;
-  }
+  formatUtc(record.observedAtMs, timestamp, sizeof(timestamp));
 
-  const float flowLpm = flowLpmFromPv(sample.pv1);
-  const float suctionKpa = suctionKpaFromPv(sample.pv2);
-  const float pressureBar = pressureBarFromPv(sample.pv3);
-  const bool hasAlarm = sample.err1 != 0 || sample.err2 != 0 || sample.err3 != 0;
+  const float flowLpm = flowLpmFromPv(record.pv1);
+  const float suctionKpa = suctionKpaFromPv(record.pv2);
+  const float pressureBar = pressureBarFromPv(record.pv3);
+  const bool hasAlarm = record.err1 != 0 || record.err2 != 0 || record.err3 != 0;
+  timeval now{};
+  gettimeofday(&now, nullptr);
+  const uint64_t nowMilliseconds = static_cast<uint64_t>(now.tv_sec) * 1000ULL + now.tv_usec / 1000;
+  const bool backfilled = nowMilliseconds > static_cast<uint64_t>(record.observedAtMs) + 120000ULL;
 
   JsonDocument document;
   document["timestamp"] = timestamp;
-  document["sequence"] = sequence;
+  document["sequence"] = record.sequence;
   document["status"] = hasAlarm ? "alarm" : "running";
   document["source"] = "esp32-s3-rs485";
   document["calibrationVersion"] = CALIBRATION_VERSION;
+  document["backfilled"] = backfilled;
 
   JsonObject raw = document["raw"].to<JsonObject>();
-  raw["pv1"] = sample.pv1;
-  raw["pv2"] = sample.pv2;
-  raw["pv3"] = sample.pv3;
+  raw["pv1"] = record.pv1;
+  raw["pv2"] = record.pv2;
+  raw["pv3"] = record.pv3;
 
   JsonObject errors = document["errors"].to<JsonObject>();
-  errors["flow"] = sample.err1;
-  errors["suction"] = sample.err2;
-  errors["pressure"] = sample.err3;
+  errors["flow"] = record.err1;
+  errors["suction"] = record.err2;
+  errors["pressure"] = record.err3;
 
   JsonObject metrics = document["metrics"].to<JsonObject>();
   metrics["flowLpm"] = roundf(flowLpm * 1000.0f) / 1000.0f;
@@ -161,9 +195,9 @@ bool publishSample(const PlcSample &sample) {
   metrics["pressureBar"] = roundf(pressureBar * 1000.0f) / 1000.0f;
 
   JsonObject quality = document["quality"].to<JsonObject>();
-  quality["flow"] = calibrationQuality(flowLpm, -22.0f, 50.0f, sample.err1);
-  quality["suction"] = calibrationQuality(suctionKpa, 0.6f, 1.8f, sample.err2);
-  quality["pressure"] = calibrationQuality(pressureBar, 0.0f, 7.0f, sample.err3);
+  quality["flow"] = calibrationQuality(flowLpm, -22.0f, 50.0f, record.err1);
+  quality["suction"] = calibrationQuality(suctionKpa, 0.6f, 1.8f, record.err2);
+  quality["pressure"] = calibrationQuality(pressureBar, 0.0f, 7.0f, record.err3);
   quality["modbus"] = "good";
 
   char payload[1400];
@@ -176,16 +210,50 @@ bool publishSample(const PlcSample &sample) {
   if (published) {
     Serial.printf(
       "[telemetry] seq=%llu pv=%ld,%ld,%ld flow=%.3f suction=%.3f pressure=%.3f\n",
-      sequence,
-      static_cast<long>(sample.pv1),
-      static_cast<long>(sample.pv2),
-      static_cast<long>(sample.pv3),
+      record.sequence,
+      static_cast<long>(record.pv1),
+      static_cast<long>(record.pv2),
+      static_cast<long>(record.pv3),
       flowLpm,
       suctionKpa,
       pressureBar
     );
   }
   return published;
+}
+
+void handleMqttMessage(String &topic, String &payload) {
+  if (topic != ACK_TOPIC) return;
+  JsonDocument document;
+  if (deserializeJson(document, payload) || !document["stored"].as<bool>()) return;
+  const uint64_t sequence = document["sequence"].as<uint64_t>();
+  if (!awaitingStorageAck || sequence != inFlightSequence) return;
+  if (telemetryQueue.acknowledge(sequence)) {
+    Serial.printf("[buffer] stored seq=%llu, %u pending\n", sequence, static_cast<unsigned>(telemetryQueue.pending()));
+  }
+  awaitingStorageAck = false;
+}
+
+void sendBufferedTelemetry() {
+  if (!mqttClient.connected() || !telemetryQueue.ready()) {
+    awaitingStorageAck = false;
+    return;
+  }
+  const uint32_t now = millis();
+  if (awaitingStorageAck) {
+    if (now - bufferPublishStartedAt < BUFFER_RETRY_MS) return;
+    awaitingStorageAck = false;
+    Serial.println("[buffer] storage acknowledgement timed out; retrying");
+  }
+  if (now - lastBufferSendAttempt < BUFFER_SEND_INTERVAL_MS) return;
+  lastBufferSendAttempt = now;
+  BufferedTelemetryRecord record{};
+  if (!telemetryQueue.peek(record)) return;
+  if (publishRecord(record)) {
+    inFlightSequence = record.sequence;
+    bufferPublishStartedAt = now;
+    awaitingStorageAck = true;
+  }
 }
 
 void setup() {
@@ -199,8 +267,10 @@ void setup() {
 
   WiFi.mode(WIFI_STA);
   mqttClient.begin(MQTT_HOST, MQTT_PORT, networkClient);
-  mqttClient.setWill(STATUS_TOPIC, "{\"status\":\"offline\"}", true, 1);
+  mqttClient.onMessage(handleMqttMessage);
+  mqttClient.setWill(STATUS_TOPIC, OFFLINE_STATUS_PAYLOAD, true, 1);
   configTime(0, 0, "pool.ntp.org", "time.google.com");
+  telemetryQueue.begin();
   connectWifi();
   nextSampleAt = millis() + SAMPLE_INTERVAL_MS;
 }
@@ -209,6 +279,7 @@ void loop() {
   connectWifi();
   connectMqtt();
   mqttClient.loop();
+  sendBufferedTelemetry();
 
   const uint32_t now = millis();
   if (static_cast<int32_t>(now - nextSampleAt) < 0) {
@@ -220,9 +291,25 @@ void loop() {
 
   PlcSample sample{};
   if (!readPlcSample(sample)) return;
-  if (!mqttClient.connected()) {
-    Serial.println("[mqtt] sample read but broker is unavailable");
+  char timestamp[32];
+  uint64_t sequence = 0;
+  if (!currentUtc(timestamp, sizeof(timestamp), sequence)) {
+    Serial.println("[time] waiting for NTP synchronization");
     return;
   }
-  publishSample(sample);
+  BufferedTelemetryRecord record{};
+  record.sequence = sequence;
+  record.observedAtMs = static_cast<int64_t>(sequence);
+  record.pv1 = sample.pv1;
+  record.pv2 = sample.pv2;
+  record.pv3 = sample.pv3;
+  record.err1 = sample.err1;
+  record.err2 = sample.err2;
+  record.err3 = sample.err3;
+  if (!telemetryQueue.enqueue(record)) {
+    Serial.println("[buffer] failed to persist telemetry sample");
+    return;
+  }
+  Serial.printf("[buffer] queued seq=%llu, %u pending\n", sequence, static_cast<unsigned>(telemetryQueue.pending()));
+  sendBufferedTelemetry();
 }

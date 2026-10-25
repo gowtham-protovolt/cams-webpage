@@ -26,10 +26,29 @@ constexpr DintWordOrder PLC_DINT_WORD_ORDER = DintWordOrder::HighWordFirst;
 constexpr uint32_t SAMPLE_INTERVAL_MS = 1000;
 constexpr uint32_t WIFI_RETRY_MS = 5000;
 constexpr uint32_t MQTT_RETRY_MS = 3000;
+constexpr uint32_t BUFFER_RETRY_MS = 5000;
+constexpr uint32_t BUFFER_SEND_INTERVAL_MS = 50;
+constexpr uint32_t MAX_BUFFERED_SAMPLES = 24UL * 60UL * 60UL;
 
-constexpr char SITE_ID[] = "plant-01";
-constexpr char MACHINE_ID[] = "CAMS-01";
-constexpr char MQTT_CLIENT_ID[] = "cams-esp32-001";
-constexpr char TELEMETRY_TOPIC[] = "cams/plant-01/CAMS-01/telemetry";
-constexpr char STATUS_TOPIC[] = "cams/plant-01/CAMS-01/status";
+#ifndef CAMS_SITE_ID
+#define CAMS_SITE_ID "plant-01"
+#endif
+#ifndef CAMS_MACHINE_ID
+#define CAMS_MACHINE_ID "CAMS-01"
+#endif
+#ifndef CAMS_MQTT_CLIENT_ID
+#define CAMS_MQTT_CLIENT_ID "cams-esp32-001"
+#endif
+#ifndef CAMS_FIRMWARE_VERSION
+#define CAMS_FIRMWARE_VERSION "1.0.0"
+#endif
+
+constexpr char SITE_ID[] = CAMS_SITE_ID;
+constexpr char MACHINE_ID[] = CAMS_MACHINE_ID;
+constexpr char MQTT_CLIENT_ID[] = CAMS_MQTT_CLIENT_ID;
+constexpr char TELEMETRY_TOPIC[] = "cams/" CAMS_SITE_ID "/" CAMS_MACHINE_ID "/telemetry";
+constexpr char STATUS_TOPIC[] = "cams/" CAMS_SITE_ID "/" CAMS_MACHINE_ID "/status";
+constexpr char ACK_TOPIC[] = "cams/" CAMS_SITE_ID "/" CAMS_MACHINE_ID "/ack";
+constexpr char ONLINE_STATUS_PAYLOAD[] = "{\"status\":\"online\",\"machineId\":\"" CAMS_MACHINE_ID "\",\"firmwareVersion\":\"" CAMS_FIRMWARE_VERSION "\"}";
+constexpr char OFFLINE_STATUS_PAYLOAD[] = "{\"status\":\"offline\",\"machineId\":\"" CAMS_MACHINE_ID "\",\"firmwareVersion\":\"" CAMS_FIRMWARE_VERSION "\"}";
 constexpr char CALIBRATION_VERSION[] = "empirical-2026-10-06-v1";

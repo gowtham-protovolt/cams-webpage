@@ -2,6 +2,7 @@ import { getDatabase } from "../db.js";
 import { telemetryEvents } from "./events.js";
 import { alarmConditions } from "../monitoring/health.js";
 import { randomUUID } from "node:crypto";
+import { reconcileMachineTickets } from "../tickets/service.js";
 
 function alarmId(siteId, machineId, code) {
   return `${siteId}/${machineId}/${code}`;
@@ -113,6 +114,7 @@ export async function syncTelemetryAlarms(telemetry, monitoring) {
     });
     telemetryEvents.emit("alarm", publicAlarm(updated));
   }));
+  await reconcileMachineTickets(siteId, machineId, now);
 }
 
 export async function setGatewayAlarm(siteId, machineId, offline, now = new Date()) {
@@ -126,6 +128,7 @@ export async function setGatewayAlarm(siteId, machineId, offline, now = new Date
       value: "offline",
       message: "ESP32 gateway is offline or telemetry is stale."
     }, now);
+    await reconcileMachineTickets(siteId, machineId, now);
     return;
   }
   const updated = await collection.findOneAndUpdate(
@@ -142,6 +145,7 @@ export async function setGatewayAlarm(siteId, machineId, offline, now = new Date
     });
     telemetryEvents.emit("alarm", publicAlarm(updated));
   }
+  await reconcileMachineTickets(siteId, machineId, now);
 }
 
 export { publicAlarm, publicAuditEntry };

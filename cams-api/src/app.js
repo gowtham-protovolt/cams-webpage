@@ -11,6 +11,10 @@ import { getMqttStatus } from "./telemetry/mqtt.js";
 import { exportsRouter } from "./routes/exports.js";
 import { usersRouter } from "./routes/users.js";
 import { settingsRouter } from "./routes/settings.js";
+import { ticketsRouter } from "./routes/tickets.js";
+import { locationsRouter } from "./routes/locations.js";
+
+import { maintenanceRouter } from "./routes/maintenance.js";
 
 export function createApp(config) {
   const app = express();
@@ -60,7 +64,10 @@ export function createApp(config) {
   app.use("/api/auth", authRouter(config));
   app.use("/api/admin", usersRouter());
   app.use("/api", settingsRouter(config));
+  app.use("/api", ticketsRouter());
   app.use("/api", telemetryRouter(config));
+  app.use("/api", locationsRouter());
+  app.use("/api", maintenanceRouter());
   app.use("/api", exportsRouter());
 
   if (config.serveWeb) {
@@ -79,6 +86,7 @@ export function createApp(config) {
 
   app.use((_request, response) => response.status(404).json({ error: "Not found." }));
   app.use((error, _request, response, _next) => {
+    if (error.status === 400) return response.status(400).json({ error: error.message });
     if (error.message === "Origin is not allowed.") return response.status(403).json({ error: error.message });
     console.error(error);
     response.status(500).json({ error: "Internal server error." });

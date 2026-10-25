@@ -5,6 +5,7 @@ import { getDatabase } from "../db.js";
 import { hashPassword, normalizeIdentity, validateNewPassword, verifyPassword } from "../auth/password.js";
 import { clearSessionCookie, createSession, hashSessionToken, setSessionCookie } from "../auth/session.js";
 import { requireAuth } from "../middleware/auth.js";
+import { ObjectId } from "mongodb";
 
 const MAX_FAILED_ATTEMPTS = 5;
 const LOCK_DURATION_MS = 15 * 60 * 1000;
@@ -39,7 +40,10 @@ export function authRouter(config) {
 
       const user = await getDatabase().collection("users").findOne({
         active: true,
-        $or: [{ emailNormalized: identity }, { usernameNormalized: identity }]
+        $and: [
+          { $or: [{ deletedAt: null }, { deletedAt: { $exists: false } }] },
+          { $or: [{ emailNormalized: identity }, { usernameNormalized: identity }] }
+        ]
       }, { projection: { _id: 1 } });
       const payload = { message: RESET_RESPONSE };
       const token = randomBytes(32).toString("base64url");
@@ -111,7 +115,7 @@ export function authRouter(config) {
       const now = new Date();
       const locked = user?.lockUntil && user.lockUntil > now;
       const validPassword = await verifyPassword(password, user?.passwordHash || await dummyPasswordHash);
-      if (!user || !user.active || locked || !validPassword) {
+      if (!user || !user.active || user.deletedAt || locked || !validPassword) {
         if (user && !locked) {
           const failedLoginCount = (user.failedLoginCount || 0) + 1;
           await users.updateOne(
@@ -141,6 +145,35 @@ export function authRouter(config) {
 
   router.get("/me", requireAuth, (request, response) => {
     response.json({ user: request.auth.user, expiresAt: request.auth.session.expiresAt.toISOString() });
+  });
+
+  router.post("/change-password", requireAuth, async (request, response, next) => {
+    try {
+      const currentPassword = request.body?.currentPassword;
+      const newPassword = request.body?.newPassword;
+      if (typeof currentPassword !== "string" || !currentPassword) return response.status(400).json({ error: "Current password is required." });
+      try {
+        validateNewPassword(newPassword);
+      } catch (error) {
+        return response.status(400).json({ error: error.message });
+      }
+      const userId = ObjectId.isValid(request.auth.user.id) ? new ObjectId(request.auth.user.id) : null;
+      if (!userId) return response.status(401).json({ error: "Your session is invalid. Sign in again." });
+      const users = getDatabase().collection("users");
+      const user = await users.findOne({ _id: userId }, { projection: { passwordHash: 1 } });
+      if (!user || !(await verifyPassword(currentPassword, user.passwordHash))) {
+        return response.status(400).json({ error: "Current password is incorrect." });
+      }
+      await users.updateOne(
+        { _id: userId },
+        { $set: { passwordHash: await hashPassword(newPassword), failedLoginCount: 0, lockUntil: null, updatedAt: new Date() } }
+      );
+      await getDatabase().collection("sessions").deleteMany({ userId });
+      clearSessionCookie(response, config);
+      response.json({ message: "Password updated. Sign in with your new password." });
+    } catch (error) {
+      next(error);
+    }
   });
 
   router.post("/logout", async (request, response, next) => {

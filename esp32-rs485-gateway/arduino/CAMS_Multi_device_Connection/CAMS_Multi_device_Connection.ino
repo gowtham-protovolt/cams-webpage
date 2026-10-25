@@ -21,8 +21,8 @@
 #define MACHINE_ID   "CAMS-01"          // format: CAMS-NN (NN = 01..99). Website la ithe ID thaan theriyum
 
 // WiFi (2.4 GHz)
-const char* WIFI_SSID = "Office";
-const char* WIFI_PASS = "!QW!12qw";
+const char* WIFI_SSID = "YOUR_WIFI";
+const char* WIFI_PASS = "YOUR_WIFI_PASS";
 
 // Per-device calibration (ovvoru PLC / sensor set ku thani-thani measure pannanum)
 #define FLOW_OFFSET        2000.09f    // flowLMin    = (PV1 - OFFSET) / SLOPE

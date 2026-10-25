@@ -1,25 +1,176 @@
-import {
+import { bindMaintenance, loadMaintenance } from "./src/pages/maintenance.js";
+import { bindLocations } from "./src/pages/locations.js";
+ import {
   renderAlarmsPage,
   renderDashboardPage,
   renderEnergyPage,
-  renderLiveDataPage,
   renderLoginPage,
   renderPasswordRequestPage,
   renderPasswordResetPage,
   renderMachineDetailPage,
   renderMachinesPage,
   renderMaintenancePage,
-  renderReportsPage,
+  renderProfilePage,
   renderSettingsPage,
   renderTrendsPage,
+  renderTicketsPage,
+  renderTicketDetailPage,
   renderUsersPage
 } from "./src/pages/index.js";
+import {
+  addComment,
+  applyTicketEvent,
+  closeTicket,
+  getTicket,
+  listTickets,
+  loadOperators,
+  loadTicket,
+  loadTickets,
+  updateTicket
+} from "./src/data/tickets.js";
+import { telemetryUpdateTime } from "./src/pages/shared.js";
 
 const app = document.querySelector("#app");
 const toastRegion = document.querySelector("#toast-region");
 
 const configuredApiBaseUrl = String(window.CAMS_CONFIG?.apiBaseUrl || "");
 const API_BASE_URL = (configuredApiBaseUrl === "same-origin" ? window.location.origin : configuredApiBaseUrl).replace(/\/$/, "");
+
+const customSelectMenuState = new WeakMap();
+const customSelectMenuOwners = new WeakMap();
+
+function setCustomSelectOpen(wrapper, open) {
+  const trigger = wrapper.querySelector("[data-custom-select-trigger]");
+  let state = customSelectMenuState.get(wrapper);
+  let menu = state?.menu || wrapper.querySelector(".custom-select-menu");
+  if (!trigger || !menu) return;
+  if (!state) {
+    state = { menu, placeholder: null };
+    customSelectMenuState.set(wrapper, state);
+    customSelectMenuOwners.set(menu, wrapper);
+  }
+  trigger.setAttribute("aria-expanded", String(open));
+  menu.hidden = !open;
+  wrapper.classList.toggle("is-open", open);
+  if (open) {
+    const bounds = trigger.getBoundingClientRect();
+    if (!state.placeholder) {
+      state.placeholder = document.createComment("time-range-menu");
+      menu.before(state.placeholder);
+    }
+    menu.classList.toggle("dashboard-time-range-menu", Boolean(wrapper.closest(".dashboard-time-range")));
+    menu.classList.toggle("dashboard-parameter-menu", Boolean(wrapper.closest(".dashboard-parameter")));
+    menu.classList.toggle("custom-calendar-select-menu", Boolean(wrapper.closest(".custom-calendar-month-select")));
+    menu.classList.toggle("user-edit-select-menu", wrapper.classList.contains("user-edit-select"));
+    document.body.append(menu);
+    menu.style.top = `${bounds.bottom + 5}px`;
+    menu.style.left = `${bounds.left}px`;
+    menu.style.width = `${bounds.width}px`;
+    menu.style.maxHeight = `${Math.max(80, window.innerHeight - bounds.bottom - 16)}px`;
+  } else {
+    if (state.placeholder?.isConnected) state.placeholder.replaceWith(menu);
+    state.placeholder = null;
+    menu.classList.remove("dashboard-time-range-menu");
+    menu.classList.remove("dashboard-parameter-menu", "custom-calendar-select-menu", "user-edit-select-menu");
+    menu.style.removeProperty("top");
+    menu.style.removeProperty("left");
+    menu.style.removeProperty("width");
+    menu.style.removeProperty("max-height");
+  }
+}
+
+function closeCustomSelects(except) {
+  document.querySelectorAll("[data-custom-select]").forEach(wrapper => {
+    if (wrapper !== except) setCustomSelectOpen(wrapper, false);
+  });
+}
+
+document.addEventListener("click", event => {
+  const activeDownloadMenu = event.target.closest?.(".download-menu");
+  document.querySelectorAll(".download-menu[open]").forEach(menu => {
+    if (menu !== activeDownloadMenu || event.target.closest?.(".download-menu-option")) menu.removeAttribute("open");
+  });
+
+  const trigger = event.target.closest?.("[data-custom-select-trigger]");
+  if (trigger) {
+    const wrapper = trigger.closest("[data-custom-select]");
+    const open = trigger.getAttribute("aria-expanded") !== "true";
+    closeCustomSelects(wrapper);
+    setCustomSelectOpen(wrapper, open);
+    return;
+  }
+
+  const option = event.target.closest?.("[data-custom-select-option]");
+  if (option) {
+    const wrapper = customSelectMenuOwners.get(option.closest(".custom-select-menu"));
+    const select = wrapper?.querySelector(".custom-select-native");
+    if (!select) return;
+    setCustomSelectOpen(wrapper, false);
+    select.value = option.dataset.customSelectOption;
+    wrapper.querySelector(".custom-select-trigger span").textContent = option.textContent;
+    customSelectMenuState.get(wrapper).menu.querySelectorAll("[data-custom-select-option]").forEach(item => {
+      item.setAttribute("aria-selected", String(item === option));
+    });
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+    document.getElementById(`${select.id}-trigger`)?.focus();
+    return;
+  }
+
+  if (!event.target.closest?.("[data-custom-select]")) closeCustomSelects();
+});
+
+document.addEventListener("keydown", event => {
+  if (event.key !== "Escape") return;
+  document.querySelectorAll(".download-menu[open]").forEach(menu => menu.removeAttribute("open"));
+});
+
+document.addEventListener("scroll", event => {
+  if (!event.target.closest?.(".custom-select-menu")) closeCustomSelects();
+}, true);
+window.addEventListener("resize", () => closeCustomSelects());
+
+document.addEventListener("keydown", event => {
+  const option = event.target.closest?.("[data-custom-select-option]");
+  if (option) {
+    const wrapper = customSelectMenuOwners.get(option.closest(".custom-select-menu"));
+    const options = [...customSelectMenuState.get(wrapper).menu.querySelectorAll("[data-custom-select-option]")];
+    const index = options.indexOf(option);
+    const nextIndex = event.key === "ArrowDown" ? Math.min(index + 1, options.length - 1)
+      : event.key === "ArrowUp" ? Math.max(index - 1, 0)
+        : event.key === "Home" ? 0
+          : event.key === "End" ? options.length - 1
+            : -1;
+    if (nextIndex >= 0) {
+      event.preventDefault();
+      options[nextIndex].focus();
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      setCustomSelectOpen(wrapper, false);
+      wrapper.querySelector("[data-custom-select-trigger]")?.focus();
+    }
+    return;
+  }
+
+  const trigger = event.target.closest?.("[data-custom-select-trigger]");
+  if (!trigger) return;
+  const wrapper = trigger.closest("[data-custom-select]");
+  if (event.key === "Escape" && trigger.getAttribute("aria-expanded") === "true") {
+    event.preventDefault();
+    setCustomSelectOpen(wrapper, false);
+    return;
+  }
+  if (!["ArrowDown", "ArrowUp", "Enter", " "].includes(event.key)) return;
+  event.preventDefault();
+  const wasOpen = trigger.getAttribute("aria-expanded") === "true";
+  closeCustomSelects(wrapper);
+  setCustomSelectOpen(wrapper, true);
+  const options = [...customSelectMenuState.get(wrapper).menu.querySelectorAll("[data-custom-select-option]")];
+  const selected = options.findIndex(item => item.getAttribute("aria-selected") === "true");
+  const index = event.key === "ArrowDown" ? Math.min(selected + (wasOpen ? 1 : 0), options.length - 1)
+    : event.key === "ArrowUp" ? Math.max(selected - (wasOpen ? 1 : 0), 0)
+      : Math.max(selected, 0);
+  options[index]?.focus();
+});
 
 function sessionUser(user) {
   return {
@@ -28,6 +179,53 @@ function sessionUser(user) {
     isOwner: user.role === "owner",
     role: user.role === "owner" ? "Owner / Admin" : user.role
   };
+}
+
+function parseFilterDate(value) {
+  const input = String(value || "").trim();
+  if (!input) return "";
+  const match = /^(\d{2})-(\d{2})-(\d{4})$/.exec(input);
+  if (!match) throw new Error("Enter dates as dd-mm-yyyy.");
+  const [, day, month, year] = match;
+  const date = new Date(Number(year), Number(month) - 1, Number(day));
+  if (date.getFullYear() !== Number(year) || date.getMonth() !== Number(month) - 1 || date.getDate() !== Number(day)) {
+    throw new Error("Enter a valid date in dd-mm-yyyy format.");
+  }
+  return `${year}-${month}-${day}`;
+}
+
+function localDateValue(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function setAlarmTimeRange(range) {
+  state.alarmTimeRange = range;
+  if (range === "custom") return;
+  const today = new Date();
+  const from = new Date(today);
+  if (range === "7 days") from.setDate(from.getDate() - 6);
+  if (range === "30 days") from.setDate(from.getDate() - 29);
+  state.alarmFromDate = localDateValue(from);
+  state.alarmToDate = localDateValue(today);
+}
+
+function setTicketTimeRange(range) {
+  state.ticketTimeRange = range;
+  if (range === "custom") return;
+  if (range === "All") {
+    state.ticketFromDate = "";
+    state.ticketToDate = "";
+    return;
+  }
+  const days = Number.parseInt(range, 10);
+  const today = new Date();
+  const from = new Date(today);
+  from.setDate(from.getDate() - days + 1);
+  state.ticketFromDate = localDateValue(from);
+  state.ticketToDate = localDateValue(today);
 }
 
 const authApi = {
@@ -72,6 +270,12 @@ const authApi = {
   async resetPassword(token, password) {
     return this.request("/api/auth/reset-password", { method: "POST", body: JSON.stringify({ token, password }) });
   },
+  async changePassword(currentPassword, newPassword) {
+    return this.request("/api/auth/change-password", {
+      method: "POST",
+      body: JSON.stringify({ currentPassword, newPassword })
+    });
+  },
   async listUsers() {
     return this.request("/api/admin/users");
   },
@@ -83,6 +287,15 @@ const authApi = {
       method: "PATCH",
       body: JSON.stringify({ active })
     });
+  },
+  async updateUser(userId, user) {
+    return this.request(`/api/admin/users/${encodeURIComponent(userId)}`, { method: "PATCH", body: JSON.stringify(user) });
+  },
+  async deleteUser(userId) {
+    return this.request(`/api/admin/users/${encodeURIComponent(userId)}`, { method: "DELETE" });
+  },
+  async restoreUser(userId) {
+    return this.request(`/api/admin/users/${encodeURIComponent(userId)}/restore`, { method: "POST", body: "{}" });
   },
   async createMachine(machine) {
     return this.request("/api/machines", { method: "POST", body: JSON.stringify(machine) });
@@ -168,15 +381,32 @@ let telemetryStream = null;
 let telemetryRenderTimer = null;
 let liveSyncTimer = null;
 let liveSyncInFlight = false;
+let profileOutsideClickBound = false;
+let calendarOutsideClickBound = false;
 
 let alarms = [];
 
 const savedMachineId = window.sessionStorage.getItem("cams.machineId");
+const savedMachineView = window.sessionStorage.getItem("cams.machineView");
 const savedTrendParameter = window.sessionStorage.getItem("cams.trendParameter");
 const savedDashboardParameter = window.sessionStorage.getItem("cams.dashboardParameter");
 const savedDashboardRange = window.sessionStorage.getItem("cams.dashboardRange");
 const savedDetailParameter = window.sessionStorage.getItem("cams.detailParameter");
+let savedScreenMode = "preview";
+try {
+  savedScreenMode = window.localStorage.getItem("cams.screenMode") === "live" ? "live" : "preview";
+} catch (error) {
+  console.warn("Could not read the CAMS screen mode preference.", error);
+}
 const resetTokenFromUrl = new URLSearchParams(window.location.search).get("resetToken") || "";
+const machineLimitStorageKey = "cams.machineOperatingLimits";
+let savedMachineLimitOverrides = {};
+try {
+  const storedLimits = window.localStorage.getItem(machineLimitStorageKey);
+  savedMachineLimitOverrides = storedLimits ? JSON.parse(storedLimits) : {};
+} catch {
+  savedMachineLimitOverrides = {};
+}
 
 const state = {
   authenticated: false,
@@ -188,30 +418,79 @@ const state = {
   passwordResetError: "",
   currentUser: null,
   page: "dashboard",
+  ticketId: "",
+  ticketType: "problem",
+  ticketRecords: [],
+  ticketOperators: [],
+  ticketsError: "",
+  ticketSearch: "",
+  ticketPriorityFilter: "All",
+  ticketClusterFilter: "All",
+  ticketAreaFilter: "All",
+  ticketDeviceFilter: "All",
+  ticketStatusFilter: "All",
+  ticketTimeRange: "All",
+  ticketFromDate: "",
+  ticketToDate: "",
+  ticketMoreFiltersOpen: false,
   machineId: savedMachineId || "CAMS-01",
   machineFilter: "All",
+  machineClusterFilter: "All",
+  machineAreaFilter: "All",
+  machineDeviceFilter: "All",
+  machineMoreFiltersOpen: false,
   machineSearch: "",
+  machineMoreFiltersOpen: false,
+  machineClusterFilter: "All",
+  machineAreaFilter: "All",
+  machineDeviceFilter: "All",
+  machineTimeRange: "All",
+  machineView: ["list", "cluster", "live"].includes(savedMachineView) ? savedMachineView : "cluster",
+  expandedMachineClusters: ["cluster-1"],
+  expandedMachineAreas: ["cluster-1:area-1"],
   alarmFilter: "All",
   trendMachine: "CAMS-01",
   trendParameter: ["Pressure", "Flow", "Suction"].includes(savedTrendParameter) ? savedTrendParameter : "Pressure",
   trendRange: "1h",
   dashboardParameter: ["Pressure", "Flow", "Suction"].includes(savedDashboardParameter) ? savedDashboardParameter : "Pressure",
-  dashboardRange: ["15m", "1h", "6h", "24h"].includes(savedDashboardRange) ? savedDashboardRange : "1h",
+  dashboardRange: ["15m", "1h", "6h", "24h", "7d", "1mo", "3mo", "6mo", "1y"].includes(savedDashboardRange) ? savedDashboardRange : "1h",
+  dashboardCustomDate: "",
+  customDatePicker: null,
+  customDatePickerMonth: "",
+  customDatePickerSelecting: null,
   detailParameter: ["Pressure", "Flow", "Suction"].includes(savedDetailParameter) ? savedDetailParameter : "Pressure",
   detailRange: "1h",
-  reportMachine: "CAMS-01",
-  reportRange: "24h",
+  detailCustomDate: "",
+  trendCustomDate: "",
+  screenMode: savedScreenMode,
   mobileOpen: false,
   notificationsOpen: false,
   userMenuOpen: false,
   telemetryConnected: false,
   lastTelemetryAt: null,
   managedUsers: [],
+  userAccountFilter: "registered",
+  userModal: null,
+  profilePasswordError: "",
+  usersRemovedOpen: false,
+  alarmMoreFiltersOpen: false,
+  alarmFilterPanel: "quick",
+  alarmClusterFilter: "All",
+  alarmAreaFilter: "All",
+  alarmMachineFilter: "All",
+  alarmPointFilter: "All",
+  alarmSeverityFilter: "All",
+  alarmStatusFilter: "All",
+  alarmTimeRange: "All",
+  alarmFromDate: "",
+  alarmToDate: "",
   usersLoading: false,
   usersError: "",
   settings: null,
   settingsSaving: false,
   settingsError: "",
+  machineLimitOverrides: savedMachineLimitOverrides,
+  machineLimitsEditing: false,
   machineModal: null,
   removedMachines: [],
   removedMachinesLoading: false,
@@ -223,13 +502,12 @@ const state = {
 };
 
 const navItems = [
-  { id: "dashboard", label: "Dashboard", icon: "dashboard", group: "Monitor" },
-  { id: "live-data", label: "Live Data", icon: "database", group: "Monitor" },
-  { id: "machines", label: "Machines", icon: "machine", group: "Monitor" },
-  { id: "trends", label: "Trends", icon: "trend", group: "Monitor" },
-  { id: "alarms", label: "Alarms & Events", icon: "alarm", group: "Monitor" },
+  { id: "dashboard", label: "Dashboard", icon: "dashboard", group: "Operations" },
+  { id: "machines", label: "Devices", icon: "machine", group: "Operations" },
+  { id: "trends", label: "Trends", icon: "trend", group: "Operations" },
+  { id: "alarms", label: "Alarms & Events", icon: "alarm", group: "Operations" },
   { id: "maintenance", label: "Maintenance", icon: "maintenance", group: "Manage" },
-  { id: "reports", label: "Reports", icon: "report", group: "Manage" },
+  { id: "tickets", label: "Tickets", icon: "layers", group: "Manage" },
   { id: "users", label: "Users", icon: "user", group: "Manage", ownerOnly: true },
   { id: "settings", label: "Settings", icon: "settings", group: "Manage" },
   { id: "energy", label: "Energy & Utilization", icon: "energy", group: "Future", future: true }
@@ -238,7 +516,7 @@ const navItems = [
 function brand(light = false) {
   return `<div class="brand-lockup ${light ? "light" : ""}">
     <span class="brand-mark">${icon("air")}</span>
-    <span><span class="brand-name">CAMS</span><span class="brand-sub">Compressed Air Monitoring System</span></span>
+    <span><span class="brand-name">CAMS</span><span class="brand-sub">Industrial Intelligence & Monitoring platform</span></span>
   </div>`;
 }
 
@@ -271,20 +549,6 @@ function displayStatus(value = "offline") {
   return normalized ? normalized[0].toUpperCase() + normalized.slice(1) : "Offline";
 }
 
-function relativeTime(value) {
-  if (!value) return "No telemetry";
-  const elapsed = Math.max(0, Date.now() - new Date(value).getTime());
-  if (!Number.isFinite(elapsed)) return "Unknown";
-  const seconds = Math.floor(elapsed / 1000);
-  if (seconds < 5) return "just now";
-  if (seconds < 60) return `${seconds} sec ago`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes} min ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours} h ago`;
-  return new Date(value).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
-}
-
 function mapMachine(item) {
   const telemetry = item.telemetry || null;
   const metrics = telemetry?.metrics || null;
@@ -296,10 +560,14 @@ function mapMachine(item) {
     siteId: item.siteId || "plant-01",
     name: item.name || item.id,
     zone: item.zone || "Unassigned",
+    cluster: item.cluster || "",
+    clusterId: item.clusterId,
+    areaId: item.areaId,
     status,
     pressure: metrics?.pressureBar ?? null,
     flow: metrics?.flowLpm ?? null,
     suction: metrics?.suctionKpa ?? null,
+    temperature: metrics?.temperatureC ?? null,
     raw: telemetry?.raw || null,
     errors: telemetry?.errors || null,
     quality: telemetry?.quality || null,
@@ -311,7 +579,7 @@ function mapMachine(item) {
     plcStatus: displayStatus(monitoring.plcStatus || "offline"),
     communicationPercent: Number.isFinite(monitoring.communicationPercent) ? monitoring.communicationPercent : 0,
     reasons: monitoring.reasons || [],
-    updated: relativeTime(receivedAt),
+    updated: telemetryUpdateTime(receivedAt, { live: status !== "Offline" }),
     receivedAt,
     hours: null
   };
@@ -347,6 +615,7 @@ function mapAlarm(item) {
     value: String(item.value ?? "—"),
     message: item.message,
     status: item.status,
+    occurredAt,
     date: date.toLocaleDateString("en-IN"),
     time: date.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
     firstSeenAt: item.firstSeenAt,
@@ -357,7 +626,32 @@ function mapAlarm(item) {
 }
 
 async function loadAlarms({ render = true } = {}) {
-  const payload = await authApi.request("/api/alarms");
+  const params = new URLSearchParams({
+    siteId: state.settings?.siteId || "plant-01",
+    limit: "500"
+  });
+  if (state.alarmClusterFilter !== "All") params.set("cluster", state.alarmClusterFilter);
+  if (state.alarmAreaFilter !== "All") {
+    try {
+      const [, area] = JSON.parse(state.alarmAreaFilter);
+      if (area) params.set("area", area);
+    } catch {
+      // Ignore legacy client-side area keys rather than sending an invalid filter.
+    }
+  }
+  if (state.alarmMachineFilter !== "All") params.set("machineId", state.alarmMachineFilter);
+  if (state.alarmPointFilter !== "All") params.set("parameter", state.alarmPointFilter);
+  const severity = state.alarmSeverityFilter !== "All"
+    ? state.alarmSeverityFilter
+    : ["Critical", "Warning", "Info"].includes(state.alarmFilter) ? state.alarmFilter : "";
+  const status = state.alarmStatusFilter !== "All"
+    ? state.alarmStatusFilter
+    : state.alarmFilter === "Resolved" ? "Resolved" : "";
+  if (severity) params.set("severity", severity);
+  if (status) params.set("status", status);
+  if (state.alarmFromDate) params.set("from", new Date(`${state.alarmFromDate}T00:00:00`).toISOString());
+  if (state.alarmToDate) params.set("to", new Date(`${state.alarmToDate}T23:59:59.999`).toISOString());
+  const payload = await authApi.request(`/api/alarms?${params}`);
   alarms = (payload.alarms || []).map(mapAlarm);
   if (render) renderApp();
 }
@@ -374,6 +668,8 @@ function appendHistory(payload) {
 
 async function loadMachines({ render = true } = {}) {
   const payload = await authApi.request("/api/machines");
+  const locations = await authApi.request(`/api/locations?siteId=${encodeURIComponent(state.settings?.siteId || "plant-01")}`);
+  state.locations = locations.clusters;
   machines = (payload.machines || []).map(mapMachine);
   for (const item of payload.machines || []) {
     if (item.telemetry) appendHistory(item.telemetry);
@@ -385,8 +681,7 @@ async function loadMachines({ render = true } = {}) {
   if (newest) state.lastTelemetryAt = newest;
   if (!machines.some(machine => machine.id === state.machineId) && machines[0]) state.machineId = machines[0].id;
   if (!machines.some(machine => machine.id === state.trendMachine) && machines[0]) state.trendMachine = machines[0].id;
-  if (!machines.some(machine => machine.id === state.reportMachine) && machines[0]) state.reportMachine = machines[0].id;
-  if (render) renderApp();
+  if (render && !state.locationManager && !state.machineModal) renderApp();
 }
 
 function openMachineModal(type, machine = null) {
@@ -429,11 +724,11 @@ async function saveMachine(event) {
   state.machineManagementError = "";
   try {
     if (state.machineModal.type === "edit") {
-      await authApi.updateMachine(data.machineId, data.siteId, { name: data.name, zone: data.zone });
+      await authApi.updateMachine(data.machineId, data.siteId, { name: data.name, clusterId: data.clusterId, areaId: data.areaId });
       showToast(`${data.machineId} details updated.`);
     } else {
-      await authApi.createMachine(data);
-      showToast(`${data.machineId} registered. Waiting for MQTT telemetry.`);
+      const result = await authApi.createMachine(data);
+      showToast(`${data.name} registered (${result.machine.id}).`);
     }
     state.machineModal = null;
     await loadMachines({ render: false });
@@ -478,13 +773,31 @@ async function restoreRemovedMachine(machineId, siteId, button) {
 }
 
 function historyRangeMilliseconds(range) {
-  return ({ "15m": 15 * 60e3, "1h": 60 * 60e3, "6h": 6 * 60 * 60e3, "24h": 24 * 60 * 60e3, "7d": 7 * 24 * 60 * 60e3 })[range] || 60 * 60e3;
+  return ({
+    "15m": 15 * 60e3,
+    "1h": 60 * 60e3,
+    "6h": 6 * 60 * 60e3,
+    "24h": 24 * 60 * 60e3,
+    "7d": 7 * 24 * 60 * 60e3,
+    "1mo": 30 * 24 * 60 * 60e3,
+    "3mo": 90 * 24 * 60 * 60e3,
+    "6mo": 180 * 24 * 60 * 60e3,
+    "1y": 365 * 24 * 60 * 60e3
+  })[range] || 60 * 60e3;
 }
 
-async function loadMachineHistory(machineId, range = "1h", { render = true } = {}) {
+function rangeStart(range, customDate = "") {
+  if (range === "custom" && customDate) {
+    const date = new Date(`${customDate}T00:00:00`);
+    if (!Number.isNaN(date.getTime())) return date;
+  }
+  return new Date(Date.now() - historyRangeMilliseconds(range));
+}
+
+async function loadMachineHistory(machineId, range = "1h", { render = true, customDate = "" } = {}) {
   const machine = machines.find(item => item.id === machineId);
   if (!machine) return;
-  const from = new Date(Date.now() - historyRangeMilliseconds(range)).toISOString();
+  const from = rangeStart(range, customDate).toISOString();
   const params = new URLSearchParams({ siteId: machine.siteId, from, limit: "2000" });
   const payload = await authApi.request(`/api/machines/${encodeURIComponent(machineId)}/telemetry?${params}`);
   machineHistory.set(machineId, []);
@@ -546,7 +859,7 @@ function scheduleTelemetryRender() {
   if (telemetryRenderTimer || !state.authenticated) return;
   telemetryRenderTimer = window.setTimeout(() => {
     telemetryRenderTimer = null;
-    if (!document.activeElement?.matches("input, select, textarea")) renderApp();
+    if (!state.locationManager && !state.machineModal && !document.activeElement?.matches("input, select, textarea")) renderApp();
   }, 250);
 }
 
@@ -584,8 +897,8 @@ async function syncLiveSnapshot() {
     const previousSnapshot = machineSnapshotKey();
     await loadMachines({ render: false });
     const telemetryChanged = previousSnapshot !== machineSnapshotKey();
-    const livePages = new Set(["dashboard", "live-data", "machines", "machine-detail", "trends", "alarms"]);
-    if (telemetryChanged && livePages.has(state.page) && !document.activeElement?.matches("input, select, textarea")) renderApp();
+    const livePages = new Set(["dashboard", "machines", "machine-detail", "trends", "alarms"]);
+    if (telemetryChanged && livePages.has(state.page) && !state.locationManager && !state.machineModal && !document.activeElement?.matches("input, select, textarea")) renderApp();
   } catch {
     // The event stream can continue updating the UI while a recovery poll fails.
   } finally {
@@ -632,6 +945,17 @@ function connectTelemetryStream() {
   telemetryStream.addEventListener("alarm", event => {
     try { applyAlarm(JSON.parse(event.data)); } catch { /* Wait for the next alarm event. */ }
   });
+  telemetryStream.addEventListener("ticket", event => {
+    try {
+      applyTicketEvent(JSON.parse(event.data));
+      state.ticketRecords = listTickets();
+      if (["dashboard", "tickets", "ticket-detail"].includes(state.page) && !document.activeElement?.matches("input, select, textarea")) {
+        renderApp();
+      }
+    } catch {
+      // Ignore malformed ticket events and keep the stream open.
+    }
+  });
   for (const eventName of ["machine-created", "machine-updated", "machine-removed", "machine-restored"]) {
     telemetryStream.addEventListener(eventName, () => {
       loadMachines().catch(() => {});
@@ -653,6 +977,12 @@ async function enterApplication(user) {
   startLiveSync();
   await loadMachines({ render: false });
   await loadAlarms({ render: false });
+  try {
+    state.ticketRecords = await loadTickets();
+    state.ticketsError = "";
+  } catch (error) {
+    state.ticketsError = error.message;
+  }
   const dashboardMachine = machines.find(machine => machine.id === state.machineId) || machines[0];
   if (dashboardMachine) {
     state.machineId = dashboardMachine.id;
@@ -677,7 +1007,10 @@ async function downloadExport(path) {
 
 function telemetryExportPath(machineId, range, format) {
   const machine = machines.find(item => item.id === machineId);
-  const from = new Date(Date.now() - historyRangeMilliseconds(range)).toISOString();
+  const customDate = range === "custom"
+    ? state.trendCustomDate
+    : "";
+  const from = rangeStart(range, customDate).toISOString();
   const params = new URLSearchParams({ machineId, siteId: machine?.siteId || "plant-01", from });
   return `/api/exports/telemetry/${format}?${params}`;
 }
@@ -692,6 +1025,7 @@ function bindDownload(buttonId, path) {
       showToast(error.message);
     } finally {
       button.disabled = false;
+      button.closest("details")?.removeAttribute("open");
     }
   });
 }
@@ -855,20 +1189,21 @@ function renderApp() {
   const user = state.currentUser || { displayName: "Plant Owner", role: "Owner / Admin" };
   const safeName = escapeHtml(user.displayName);
   const safeRole = escapeHtml(user.role);
-  const groups = ["Monitor", "Manage", "Future"];
+  const groups = ["Operations", "Manage", "Future"];
   const staleAfterMs = Number(state.settings?.sampling?.staleAfterSeconds || 10) * 1000;
   const freshGateways = machines.filter(machine => machine.gatewayStatus === "Online" && machine.receivedAt && Date.now() - new Date(machine.receivedAt).getTime() <= staleAfterMs).length;
   const plantConnectionState = freshGateways ? "online" : "offline";
   const connectionLabel = state.telemetryConnected ? "CAMS stream connected" : "CAMS stream reconnecting";
-  const networkLabel = freshGateways ? `${freshGateways} gateway${freshGateways === 1 ? "" : "s"} sending live data` : state.lastTelemetryAt ? `Last telemetry · ${relativeTime(state.lastTelemetryAt)}` : "No gateway telemetry";
+  const networkLabel = freshGateways ? `${freshGateways} gateway${freshGateways === 1 ? "" : "s"} sending live data` : state.lastTelemetryAt ? `Last telemetry · ${telemetryUpdateTime(state.lastTelemetryAt)}` : "No telemetry";
   const openAlarmCount = alarms.filter(alarm => alarm.status !== "Resolved").length;
-  const sidebarNav = groups.map(group => `<div class="nav-group-label">${group}</div><nav class="nav-list">${navItems.filter(item => item.group === group && (!item.ownerOnly || user.isOwner)).map(item => `<button class="nav-item ${state.page === item.id || (state.page === "machine-detail" && item.id === "machines") ? "active" : ""}" data-page="${item.id}">${icon(item.icon)}<span>${item.label}</span>${item.future ? '<span class="future">P2</span>' : ""}</button>`).join("")}</nav>`).join("");
-  app.innerHTML = `<div class="app-shell">
+  const sidebarNav = groups.map(group => `<div class="nav-group-label">${group}</div><nav class="nav-list">${navItems.filter(item => item.group === group && (!item.ownerOnly || user.isOwner)).map(item => `<button class="nav-item ${state.page === item.id || (state.page === "ticket-detail" && item.id === "tickets") || (state.page === "machine-detail" && item.id === "machines") ? "active" : ""}" data-page="${item.id}">${icon(item.icon)}<span>${item.label}</span>${item.future ? '<span class="future">P2</span>' : ""}</button>`).join("")}</nav>`).join("");
+  app.innerHTML = `<div class="app-shell ${state.screenMode === "live" ? "live-screen" : "preview-screen"}">
     ${state.mobileOpen ? '<button class="mobile-overlay" id="mobile-overlay" aria-label="Close menu"></button>' : ""}
+    <button class="sidebar-reveal-zone" type="button" aria-label="Reveal navigation" title="Reveal navigation"></button>
     <aside class="sidebar ${state.mobileOpen ? "open" : ""}">
       ${brand(true)}
       ${sidebarNav}
-      <div class="sidebar-foot"><div class="sidebar-foot-row"><i class="pulse-dot"></i><span>${connectionLabel}</span></div><div class="sidebar-foot-row"><span>MongoDB-backed monitoring</span></div></div>
+      <div class="sidebar-foot"><div class="sidebar-foot-row"><i class="pulse-dot"></i><span>${connectionLabel}</span></div><div class="sidebar-foot-row"><span>AI-backed Monitoring</span></div></div>
     </aside>
     <header class="top-header">
       <div class="header-plant"><button class="icon-btn mobile-menu" id="mobile-menu" aria-label="Open menu">${icon("menu")}</button><div><div class="plant-name">${escapeHtml(state.settings?.plant?.name || "Demo Spinning Plant")}</div><div class="plant-meta ${plantConnectionState}"><i class="live-dot"></i><span>${networkLabel}</span></div></div></div>
@@ -877,7 +1212,7 @@ function renderApp() {
         <button class="icon-btn notification-btn" id="notification-button" aria-label="Notifications">${icon("bell")}${openAlarmCount ? `<span class="notification-badge">${openAlarmCount}</span>` : ""}</button>
         <div class="account-control">
           <button class="user-menu" id="user-menu" aria-haspopup="menu" aria-expanded="${state.userMenuOpen}"><span class="avatar">${escapeHtml(initials(user.displayName))}</span><span class="user-copy"><strong>${safeName}</strong><span>${safeRole}</span></span>${icon("chevronDown")}</button>
-          ${state.userMenuOpen ? `<div class="account-menu" role="menu"><div class="account-summary"><span class="avatar">${escapeHtml(initials(user.displayName))}</span><div><strong>${safeName}</strong><span>${escapeHtml(user.identity)}</span></div></div><div class="account-session">${icon("shield")}<span>Secure server session active</span></div><button id="sign-out" class="account-action" role="menuitem">${icon("logout")}<span>Sign out</span></button></div>` : ""}
+          ${state.userMenuOpen ? `<div class="account-menu" role="menu"><div class="account-summary"><span class="avatar">${escapeHtml(initials(user.displayName))}</span><div><strong>${safeName}</strong><span>${escapeHtml(user.identity)}</span></div></div><div class="account-session">${icon("shield")}<span>Secure server session active</span></div><button id="change-profile-password" class="account-action" role="menuitem">${icon("lock")}<span>Change password</span></button><button id="sign-out" class="account-action" role="menuitem">${icon("logout")}<span>Sign out</span></button></div>` : ""}
         </div>
       </div>
     </header>
@@ -885,20 +1220,59 @@ function renderApp() {
   </div>`;
   bindGlobalEvents();
   bindPageEvents();
+  positionCustomCalendar();
   updateClock();
 }
 
+function positionCustomCalendar() {
+  const picker = state.customDatePicker && document.querySelector(`#${CSS.escape(state.customDatePicker)}`);
+  const calendar = picker?.parentElement.querySelector(".custom-calendar");
+  if (!picker || !calendar) return;
+
+  const anchor = picker.getBoundingClientRect();
+  const bounds = calendar.getBoundingClientRect();
+  const margin = 12;
+  const left = Math.max(margin, Math.min(anchor.right - bounds.width, window.innerWidth - bounds.width - margin));
+  const below = anchor.bottom + 7;
+  const top = below + bounds.height <= window.innerHeight - margin
+    ? below
+    : Math.max(margin, anchor.top - bounds.height - 7);
+  calendar.style.left = `${left}px`;
+  calendar.style.top = `${top}px`;
+}
+
+function applyTicketListFilters() {
+  const search = state.ticketSearch.trim().toLowerCase();
+  let visibleCount = 0;
+  document.querySelectorAll("[data-ticket-row]").forEach(row => {
+    const matchesSearch = row.dataset.ticketSearch.includes(search);
+    const matchesPriority = state.ticketPriorityFilter === "All" || row.dataset.ticketPriority === state.ticketPriorityFilter;
+    const matchesCluster = state.ticketClusterFilter === "All" || row.dataset.ticketCluster === state.ticketClusterFilter;
+    const matchesArea = state.ticketAreaFilter === "All" || row.dataset.ticketArea === state.ticketAreaFilter;
+    const matchesDevice = state.ticketDeviceFilter === "All" || row.dataset.ticketDevice === state.ticketDeviceFilter;
+    const matchesStatus = state.ticketStatusFilter === "All" || row.dataset.ticketStatus === state.ticketStatusFilter;
+    const raisedAt = row.dataset.ticketRaisedAt ? new Date(row.dataset.ticketRaisedAt) : null;
+    const afterFrom = !state.ticketFromDate || (raisedAt && raisedAt >= new Date(`${state.ticketFromDate}T00:00:00`));
+    const beforeTo = !state.ticketToDate || (raisedAt && raisedAt <= new Date(`${state.ticketToDate}T23:59:59.999`));
+    row.hidden = !(matchesSearch && matchesPriority && matchesCluster && matchesArea && matchesDevice && matchesStatus && afterFrom && beforeTo);
+    if (!row.hidden) visibleCount += 1;
+  });
+  const emptyRow = document.querySelector("#ticket-empty-row");
+  if (emptyRow) emptyRow.hidden = visibleCount > 0;
+}
+
 function pageContent() {
-  const model = { state, machines, machineHistory, alarms };
+  const model = { state, machines, machineHistory, alarms, tickets: state.ticketRecords, operators: state.ticketOperators };
   switch (state.page) {
-    case "live-data": return renderLiveDataPage(model);
     case "machines": return renderMachinesPage(model);
     case "machine-detail": return renderMachineDetailPage(model);
     case "trends": return renderTrendsPage(model);
     case "alarms": return renderAlarmsPage(model);
     case "maintenance": return renderMaintenancePage(model);
-    case "reports": return renderReportsPage(model);
+    case "tickets": return renderTicketsPage(model);
+    case "ticket-detail": return renderTicketDetailPage(model);
     case "users": return renderUsersPage(model);
+    case "profile": return renderProfilePage(model);
     case "energy": return renderEnergyPage(model);
     case "settings": return renderSettingsPage(model);
     default: return renderDashboardPage(model);
@@ -922,7 +1296,41 @@ async function loadManagedUsers({ render = true } = {}) {
 }
 
 function bindGlobalEvents() {
+  if (!calendarOutsideClickBound) {
+    window.addEventListener("resize", positionCustomCalendar);
+    window.addEventListener("scroll", positionCustomCalendar, true);
+  }
+  if (!profileOutsideClickBound) {
+    document.addEventListener("click", event => {
+      if (!state.userMenuOpen || event.target.closest("#user-menu, .account-menu")) return;
+      state.userMenuOpen = false;
+      renderApp();
+    });
+    profileOutsideClickBound = true;
+  }
+  if (!calendarOutsideClickBound) {
+    document.addEventListener("click", event => {
+      if (!state.customDatePicker || event.composedPath().some(node => node instanceof Element && node.matches(".custom-date-picker"))) return;
+      state.customDatePicker = null;
+      state.customDatePickerSelecting = null;
+      renderApp();
+    });
+    calendarOutsideClickBound = true;
+  }
   document.querySelectorAll("[data-page]").forEach(button => button.addEventListener("click", () => navigate(button.dataset.page)));
+  document.querySelectorAll("[data-ticket-row]").forEach(row => {
+    const openTicket = event => {
+      if (event.target.closest(".ticket-row-id")) return;
+      state.ticketId = row.dataset.ticketOpen;
+      navigate("ticket-detail");
+    };
+    row.addEventListener("click", openTicket);
+    row.addEventListener("keydown", event => {
+      if (event.target !== row || !["Enter", " "].includes(event.key)) return;
+      event.preventDefault();
+      openTicket(event);
+    });
+  });
   document.querySelectorAll("[data-machine]").forEach(button => button.addEventListener("click", event => {
     event.stopPropagation();
     state.machineId = button.dataset.machine;
@@ -932,6 +1340,19 @@ function bindGlobalEvents() {
   }));
   document.querySelector("#mobile-menu")?.addEventListener("click", () => { state.mobileOpen = true; renderApp(); });
   document.querySelector("#mobile-overlay")?.addEventListener("click", () => { state.mobileOpen = false; renderApp(); });
+  document.querySelectorAll("[data-screen-mode]").forEach(button => button.addEventListener("click", () => {
+    const mode = button.dataset.screenMode;
+    if (!["preview", "live"].includes(mode)) return;
+    state.screenMode = mode;
+    if (mode === "live") state.page = "dashboard";
+    try {
+      window.localStorage.setItem("cams.screenMode", mode);
+    } catch (error) {
+      console.error("Could not save the CAMS screen mode preference.", error);
+      showToast("Display mode changed, but could not be saved in this browser.");
+    }
+    renderApp();
+  }));
   document.querySelector("#notification-button")?.addEventListener("click", () => { navigate("alarms"); });
   document.querySelector("#user-menu")?.addEventListener("click", () => {
     state.userMenuOpen = !state.userMenuOpen;
@@ -949,6 +1370,31 @@ function bindGlobalEvents() {
       showToast("Signed out securely.");
     } catch (error) {
       showToast(error.message);
+    }
+  });
+  document.querySelector("#change-profile-password")?.addEventListener("click", () => {
+    state.userMenuOpen = false;
+    state.profilePasswordError = "";
+    navigate("profile");
+  });
+  document.querySelector("#profile-password-form")?.addEventListener("submit", async event => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const submit = form.querySelector('button[type="submit"]');
+    submit.disabled = true;
+    try {
+      await authApi.changePassword(String(new FormData(form).get("currentPassword") || ""), String(new FormData(form).get("newPassword") || ""));
+      closeTelemetryStream();
+      stopLiveSync();
+      state.authenticated = false;
+      state.currentUser = null;
+      state.profilePasswordError = "";
+      renderLogin();
+      showToast("Password updated. Sign in with your new password.");
+    } catch (error) {
+      state.profilePasswordError = error.message;
+      submit.disabled = false;
+      renderApp();
     }
   });
 }
@@ -1027,6 +1473,247 @@ function bindConnectedProcessChart() {
 }
 
 function bindPageEvents() {
+  bindLocations({ state, api: authApi, devices: machines, render: renderApp, refresh: loadMachines, toast: showToast });
+  bindMaintenance(state, machines, authApi, renderApp, showToast);
+  document.querySelectorAll("[data-dashboard-kpi]").forEach(card => {
+    const selectKpi = () => {
+      const filter = card.dataset.dashboardKpi;
+      if (filter === "alarms") {
+        state.alarmFilter = "Open";
+        navigate("alarms");
+        return;
+      }
+      state.machineFilter = filter === "running" ? "Online" : filter === "stopped" ? "Offline" : "All";
+      state.machineView = "list";
+      window.sessionStorage.setItem("cams.machineView", state.machineView);
+      state.machineSearch = "";
+      navigate("machines");
+    };
+    card.addEventListener("click", selectKpi);
+    card.addEventListener("keydown", event => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      selectKpi();
+    });
+  });
+  document.querySelectorAll("[data-ticket-type]").forEach(button => button.addEventListener("click", () => {
+    state.ticketType = button.dataset.ticketType;
+    renderApp();
+  }));
+  document.querySelectorAll("[data-ticket-priority-filter]").forEach(button => button.addEventListener("click", () => {
+    state.ticketPriorityFilter = button.dataset.ticketPriorityFilter;
+    renderApp();
+  }));
+  document.querySelector("#ticket-search")?.addEventListener("input", event => {
+    state.ticketSearch = event.target.value;
+    applyTicketListFilters();
+  });
+  document.querySelector("#ticket-more-filters")?.addEventListener("click", () => {
+    state.ticketMoreFiltersOpen = true;
+    renderApp();
+  });
+  document.querySelector("#ticket-filters-close")?.addEventListener("click", () => {
+    state.ticketMoreFiltersOpen = false;
+    renderApp();
+  });
+  document.querySelector("#ticket-filters-backdrop")?.addEventListener("click", event => {
+    if (event.target !== event.currentTarget) return;
+    state.ticketMoreFiltersOpen = false;
+    renderApp();
+  });
+  document.querySelector("#ticket-cluster")?.addEventListener("change", event => {
+    state.ticketClusterFilter = event.target.value;
+    state.ticketAreaFilter = "All";
+    state.ticketDeviceFilter = "All";
+    renderApp();
+  });
+  document.querySelector("#ticket-area")?.addEventListener("change", event => {
+    state.ticketAreaFilter = event.target.value;
+    state.ticketDeviceFilter = "All";
+    renderApp();
+  });
+  document.querySelector("#ticket-device")?.addEventListener("change", event => {
+    state.ticketDeviceFilter = event.target.value;
+    renderApp();
+  });
+  document.querySelector("#ticket-priority")?.addEventListener("change", event => {
+    state.ticketPriorityFilter = event.target.value;
+    renderApp();
+  });
+  document.querySelector("#ticket-status")?.addEventListener("change", event => {
+    state.ticketStatusFilter = event.target.value;
+    renderApp();
+  });
+  document.querySelectorAll("[data-ticket-time-range]").forEach(button => button.addEventListener("click", () => {
+    setTicketTimeRange(button.dataset.ticketTimeRange);
+    renderApp();
+  }));
+  document.querySelectorAll("[data-ticket-clear-group]").forEach(button => button.addEventListener("click", () => {
+    const group = button.dataset.ticketClearGroup;
+    if (group === "cluster") {
+      state.ticketClusterFilter = "All";
+      state.ticketAreaFilter = "All";
+      state.ticketDeviceFilter = "All";
+    }
+    if (group === "area") {
+      state.ticketAreaFilter = "All";
+      state.ticketDeviceFilter = "All";
+    }
+    if (group === "device") state.ticketDeviceFilter = "All";
+    if (group === "priority") state.ticketPriorityFilter = "All";
+    if (group === "status") state.ticketStatusFilter = "All";
+    if (group === "time") setTicketTimeRange("All");
+    renderApp();
+  }));
+  document.querySelector("#ticket-filters-reset")?.addEventListener("click", () => {
+    state.ticketClusterFilter = "All";
+    state.ticketAreaFilter = "All";
+    state.ticketDeviceFilter = "All";
+    state.ticketPriorityFilter = "All";
+    state.ticketStatusFilter = "All";
+    setTicketTimeRange("All");
+    renderApp();
+  });
+  document.querySelector("#ticket-filters-form")?.addEventListener("submit", event => {
+    event.preventDefault();
+    try {
+      if (state.ticketTimeRange === "custom") {
+        const values = new FormData(event.currentTarget);
+        state.ticketFromDate = parseFilterDate(values.get("fromDate"));
+        state.ticketToDate = parseFilterDate(values.get("toDate"));
+        if (state.ticketFromDate && state.ticketToDate && state.ticketFromDate > state.ticketToDate) throw new Error("From date must be before To date.");
+      }
+      state.ticketMoreFiltersOpen = false;
+      renderApp();
+    } catch (error) {
+      showToast(error.message);
+    }
+  });
+  applyTicketListFilters();
+  const ticketForm = document.querySelector("#ticket-detail-form");
+  ticketForm?.addEventListener("change", async event => {
+    const field = event.target.closest("[data-ticket-field]");
+    if (!field || field.readOnly) return;
+    const value = field.name === "dueBy" && field.value ? new Date(field.value).toISOString() : field.value;
+    try {
+      await updateTicket(state.ticketId, { [field.name]: value });
+      state.ticketRecords = listTickets();
+      if (field.name === "maintenance" && value === "Closed") showToast("Ticket closed successfully.");
+    } catch (error) {
+      showToast(error.message);
+    }
+  });
+  ticketForm?.addEventListener("submit", event => {
+    event.preventDefault();
+    const patch = {};
+    ticketForm.querySelectorAll("[data-ticket-field]").forEach(field => {
+      if (field.readOnly) return;
+      patch[field.name] = field.name === "dueBy" && field.value ? new Date(field.value).toISOString() : field.value;
+    });
+    updateTicket(state.ticketId, patch).then(() => {
+      state.ticketRecords = listTickets();
+      showToast("Ticket updated successfully.");
+      renderApp();
+    }).catch(error => showToast(error.message));
+  });
+  document.querySelector("#ticket-maintenance")?.addEventListener("change", async event => {
+    try {
+      await updateTicket(state.ticketId, { maintenance: event.target.value });
+      state.ticketRecords = listTickets();
+      if (event.target.value === "Closed") showToast("Ticket closed successfully.");
+      renderApp();
+    } catch (error) {
+      showToast(error.message);
+      renderApp();
+    }
+  });
+  document.querySelector("#resolve-ticket")?.addEventListener("click", async () => {
+    try {
+      await closeTicket(state.ticketId);
+      state.ticketRecords = listTickets();
+      showToast("Ticket resolved successfully.");
+      renderApp();
+    } catch (error) {
+      showToast(error.message);
+    }
+  });
+  document.querySelector("#ticket-comment-form")?.addEventListener("submit", async event => {
+    event.preventDefault();
+    const comment = new FormData(event.currentTarget).get("comment")?.toString().trim();
+    if (!comment) return;
+    try {
+      await addComment(state.ticketId, comment);
+      state.ticketRecords = listTickets();
+      showToast("Comment posted successfully.");
+      renderApp();
+    } catch (error) {
+      showToast(error.message);
+    }
+  });
+  document.querySelectorAll("[data-custom-date-toggle]").forEach(button => button.addEventListener("click", () => {
+    const id = button.id;
+    state.customDatePicker = state.customDatePicker === id ? null : id;
+    state.customDatePickerSelecting = null;
+    if (state.customDatePicker) {
+      const dateState = {
+        "dashboard-custom-date": state.dashboardCustomDate,
+        "detail-custom-date": state.detailCustomDate,
+        "trend-custom-date": state.trendCustomDate,
+        "service-start-date": state.maintenance?.draft?.serviceDate,
+        "service-end-date": state.maintenance?.draft?.endDate,
+        "service-history-from-date": state.maintenance?.historyCustomDraft?.start,
+        "service-history-to-date": state.maintenance?.historyCustomDraft?.end
+      }[id];
+      const today = new Date();
+      state.customDatePickerMonth = dateState || `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+    }
+    renderApp();
+  }));
+  document.querySelectorAll("[data-custom-date-month-year]").forEach(button => button.addEventListener("click", () => {
+    state.customDatePickerSelecting = state.customDatePickerSelecting === state.customDatePicker ? null : state.customDatePicker;
+    renderApp();
+  }));
+  document.querySelectorAll("[data-custom-date-part]").forEach(select => select.addEventListener("change", () => {
+    const [year, month] = state.customDatePickerMonth.split("-").map(Number);
+    const nextYear = select.dataset.customDatePart === "year" ? Number(select.value) : year;
+    const nextMonth = select.dataset.customDatePart === "month" ? Number(select.value) : month;
+    state.customDatePickerMonth = `${nextYear}-${String(nextMonth).padStart(2, "0")}-01`;
+    renderApp();
+  }));
+  document.querySelector("[data-custom-date-done]")?.addEventListener("click", () => {
+    state.customDatePickerSelecting = null;
+    renderApp();
+  });
+  document.querySelectorAll("[data-custom-date-select]").forEach(button => button.addEventListener("click", () => {
+    const picker = button.closest("[data-custom-date-picker]");
+    const id = picker?.dataset.customDatePicker;
+    const date = button.dataset.customDateSelect;
+    const dateState = {
+      "dashboard-custom-date": "dashboardCustomDate",
+      "detail-custom-date": "detailCustomDate",
+      "trend-custom-date": "trendCustomDate",
+    }[id];
+    const serviceDateState = {
+      "service-start-date": "serviceDate",
+      "service-end-date": "endDate"
+    }[id];
+    if (dateState) state[dateState] = date;
+    else if (id === "service-history-from-date" && state.maintenance?.historyCustomDraft) {
+      state.maintenance.historyCustomDraft.start = date;
+      if (!state.maintenance.historyCustomDraft.end || state.maintenance.historyCustomDraft.end < date) state.maintenance.historyCustomDraft.end = date;
+    }
+    else if (id === "service-history-to-date" && state.maintenance?.historyCustomDraft) state.maintenance.historyCustomDraft.end = date;
+    else if (serviceDateState && state.maintenance?.draft) {
+      state.maintenance.draft[serviceDateState] = date;
+      if (serviceDateState === "serviceDate" && (!state.maintenance.draft.endDate || state.maintenance.draft.endDate < date)) state.maintenance.draft.endDate = date;
+    } else return;
+    state.customDatePicker = null;
+    state.customDatePickerSelecting = null;
+    renderApp();
+    if (id === "dashboard-custom-date" && state.machineId) loadMachineHistory(state.machineId, "custom", { customDate: date }).catch(error => showToast(error.message));
+    if (id === "detail-custom-date" && state.machineId) loadMachineHistory(state.machineId, "custom", { customDate: date }).catch(error => showToast(error.message));
+    if (id === "trend-custom-date") loadMachineHistory(state.trendMachine, "custom", { customDate: date }).catch(error => showToast(error.message));
+  }));
   document.querySelector("#refresh-dashboard")?.addEventListener("click", async () => {
     try {
       await loadMachines({ render: false });
@@ -1046,18 +1733,100 @@ function bindPageEvents() {
     search.focus();
     search.setSelectionRange(position, position);
   });
-  document.querySelectorAll("[data-filter]").forEach(button => button.addEventListener("click", () => { state.machineFilter = button.dataset.filter; renderApp(); }));
+  document.querySelectorAll("[data-filter]").forEach(button => button.addEventListener("click", () => {
+    state.machineFilter = button.dataset.filter;
+    if (button.dataset.machineViewTarget) {
+      state.machineView = button.dataset.machineViewTarget;
+      window.sessionStorage.setItem("cams.machineView", state.machineView);
+    }
+    renderApp();
+  }));
+  document.querySelectorAll("[data-machine-view]").forEach(button => button.addEventListener("click", () => {
+    state.machineView = button.dataset.machineView;
+    if (state.machineView === "cluster") state.machineFilter = "All";
+    window.sessionStorage.setItem("cams.machineView", state.machineView);
+    renderApp();
+    if (state.machineView === "live") {
+      const machineId = machines.find(machine => machine.id === state.machineId)?.id || machines[0]?.id;
+      if (machineId) loadMachineHistory(machineId, "24h").catch(error => showToast(error.message));
+    }
+  }));
+  document.querySelector("#machine-more-filters")?.addEventListener("click", () => {
+    state.machineMoreFiltersOpen = true;
+    renderApp();
+  });
+  document.querySelector("#machine-filters-close")?.addEventListener("click", () => {
+    state.machineMoreFiltersOpen = false;
+    renderApp();
+  });
+  document.querySelector("#machine-filters-backdrop")?.addEventListener("click", event => {
+    if (event.target !== event.currentTarget) return;
+    state.machineMoreFiltersOpen = false;
+    renderApp();
+  });
+  document.querySelector("#machine-cluster")?.addEventListener("change", event => {
+    state.machineClusterFilter = event.target.value;
+    state.machineAreaFilter = "All";
+    state.machineDeviceFilter = "All";
+    renderApp();
+  });
+  document.querySelector("#machine-area")?.addEventListener("change", event => {
+    state.machineAreaFilter = event.target.value;
+    state.machineDeviceFilter = "All";
+    renderApp();
+  });
+  document.querySelector("#machine-device")?.addEventListener("change", event => {
+    state.machineDeviceFilter = event.target.value;
+    renderApp();
+  });
+  document.querySelectorAll("[data-machine-filter-value]").forEach(button => button.addEventListener("click", () => {
+    state.machineFilter = state.machineFilter === button.dataset.machineFilterValue ? "All" : button.dataset.machineFilterValue;
+    renderApp();
+  }));
+  document.querySelectorAll("[data-machine-time-range]").forEach(button => button.addEventListener("click", () => {
+    state.machineTimeRange = button.dataset.machineTimeRange;
+    renderApp();
+  }));
+  document.querySelector("#machine-filters-reset")?.addEventListener("click", () => {
+    state.machineFilter = "All";
+    state.machineClusterFilter = "All";
+    state.machineAreaFilter = "All";
+    state.machineDeviceFilter = "All";
+    state.machineTimeRange = "All";
+    renderApp();
+  });
+  document.querySelector("#machine-filters-form")?.addEventListener("submit", event => {
+    event.preventDefault();
+    state.machineMoreFiltersOpen = false;
+    renderApp();
+  });
+  document.querySelectorAll("[data-cluster-toggle]").forEach(button => button.addEventListener("click", () => {
+    const key = button.dataset.clusterToggle;
+    state.expandedMachineClusters = state.expandedMachineClusters.includes(key)
+      ? state.expandedMachineClusters.filter(item => item !== key)
+      : [...state.expandedMachineClusters, key];
+    renderApp();
+  }));
+  document.querySelectorAll("[data-area-toggle]").forEach(button => button.addEventListener("click", () => {
+    const key = button.dataset.areaToggle;
+    state.expandedMachineAreas = state.expandedMachineAreas.includes(key)
+      ? state.expandedMachineAreas.filter(item => item !== key)
+      : [...state.expandedMachineAreas, key];
+    renderApp();
+  }));
   document.querySelector("#dashboard-parameter")?.addEventListener("change", event => {
     state.dashboardParameter = event.target.value;
     window.sessionStorage.setItem("cams.dashboardParameter", state.dashboardParameter);
     renderApp();
   });
-  document.querySelectorAll("[data-dashboard-range]").forEach(button => button.addEventListener("click", () => {
-    state.dashboardRange = button.dataset.dashboardRange;
+  document.querySelector("#dashboard-range")?.addEventListener("change", event => {
+    state.customDatePicker = null;
+    state.customDatePickerSelecting = null;
+    state.dashboardRange = event.target.value;
     window.sessionStorage.setItem("cams.dashboardRange", state.dashboardRange);
     renderApp();
-    if (state.machineId) loadMachineHistory(state.machineId, state.dashboardRange).catch(error => showToast(error.message));
-  }));
+    if (state.machineId && state.dashboardRange !== "custom") loadMachineHistory(state.machineId, state.dashboardRange).catch(error => showToast(error.message));
+  });
   document.querySelector("#add-machine")?.addEventListener("click", () => openMachineModal("create"));
   document.querySelector("#removed-machines")?.addEventListener("click", async () => {
     state.machineModal = { type: "removed", machine: null };
@@ -1083,7 +1852,94 @@ function bindPageEvents() {
   document.querySelectorAll("[data-restore-machine]").forEach(button => button.addEventListener("click", () => {
     restoreRemovedMachine(button.dataset.restoreMachine, button.dataset.siteId, button);
   }));
-  document.querySelectorAll("[data-alarm-filter]").forEach(button => button.addEventListener("click", () => { state.alarmFilter = button.dataset.alarmFilter; renderApp(); }));
+  document.querySelectorAll("[data-alarm-filter]").forEach(button => button.addEventListener("click", () => {
+    state.alarmFilter = button.dataset.alarmFilter;
+    loadAlarms().catch(error => showToast(error.message));
+  }));
+  document.querySelector("#alarm-more-filters")?.addEventListener("click", () => { state.alarmMoreFiltersOpen = true; renderApp(); });
+  document.querySelector("#alarm-filters-close")?.addEventListener("click", () => { state.alarmMoreFiltersOpen = false; renderApp(); });
+  document.querySelector("#alarm-filters-cancel")?.addEventListener("click", () => { state.alarmMoreFiltersOpen = false; renderApp(); });
+  document.querySelector("#alarm-cluster")?.addEventListener("change", event => {
+    state.alarmClusterFilter = event.target.value;
+    state.alarmAreaFilter = "All";
+    state.alarmMachineFilter = "All";
+    renderApp();
+  });
+  document.querySelector("#alarm-area")?.addEventListener("change", event => {
+    state.alarmAreaFilter = event.target.value;
+    state.alarmMachineFilter = "All";
+    renderApp();
+  });
+  document.querySelector("#alarm-device")?.addEventListener("change", event => {
+    state.alarmMachineFilter = event.target.value;
+    renderApp();
+  });
+  document.querySelector("#alarm-point")?.addEventListener("change", event => {
+    state.alarmPointFilter = event.target.value;
+    renderApp();
+  });
+  document.querySelectorAll("[data-alarm-choice]").forEach(button => button.addEventListener("click", () => {
+    const group = button.dataset.alarmChoiceGroup;
+    const value = button.dataset.alarmChoice;
+    if (group === "severity") state.alarmSeverityFilter = state.alarmSeverityFilter === value ? "All" : value;
+    if (group === "status") state.alarmStatusFilter = state.alarmStatusFilter === value ? "All" : value;
+    state.alarmFilter = "All";
+    renderApp();
+  }));
+  document.querySelectorAll("[data-alarm-time-range]").forEach(button => button.addEventListener("click", () => {
+    setAlarmTimeRange(button.dataset.alarmTimeRange);
+    renderApp();
+  }));
+  document.querySelectorAll("[data-alarm-clear-group]").forEach(button => button.addEventListener("click", () => {
+    const group = button.dataset.alarmClearGroup;
+    if (group === "cluster") {
+      state.alarmClusterFilter = "All";
+      state.alarmAreaFilter = "All";
+      state.alarmMachineFilter = "All";
+    }
+    if (group === "area") {
+      state.alarmAreaFilter = "All";
+      state.alarmMachineFilter = "All";
+    }
+    if (group === "device") state.alarmMachineFilter = "All";
+    if (group === "point") state.alarmPointFilter = "All";
+    if (group === "severity") state.alarmSeverityFilter = "All";
+    if (group === "status") state.alarmStatusFilter = "All";
+    if (group === "time") {
+      state.alarmTimeRange = "All";
+      state.alarmFromDate = "";
+      state.alarmToDate = "";
+    }
+    renderApp();
+  }));
+  document.querySelector("#alarm-filters-reset")?.addEventListener("click", () => {
+    state.alarmClusterFilter = "All";
+    state.alarmAreaFilter = "All";
+    state.alarmMachineFilter = "All";
+    state.alarmPointFilter = "All";
+    state.alarmSeverityFilter = "All";
+    state.alarmStatusFilter = "All";
+    state.alarmFromDate = "";
+    state.alarmToDate = "";
+    state.alarmTimeRange = "All";
+    state.alarmFilter = "All";
+    renderApp();
+  });
+  document.querySelector("#alarm-filters-form")?.addEventListener("submit", async event => {
+    event.preventDefault();
+    try {
+      if (state.alarmTimeRange === "custom") {
+        const values = new FormData(event.currentTarget);
+        state.alarmFromDate = parseFilterDate(values.get("fromDate"));
+        state.alarmToDate = parseFilterDate(values.get("toDate"));
+        if (state.alarmFromDate && state.alarmToDate && state.alarmFromDate > state.alarmToDate) throw new Error("From date must be before To date.");
+      }
+      state.alarmMoreFiltersOpen = false;
+      await loadAlarms();
+    } catch (error) {
+      showToast(error.message);
+    }
+  });
   document.querySelectorAll("[data-ack]").forEach(button => button.addEventListener("click", () => openAlarmAction(button.dataset.ack, "Acknowledged")));
   document.querySelectorAll("[data-resolve]").forEach(button => button.addEventListener("click", () => openAlarmAction(button.dataset.resolve, "Resolved")));
   document.querySelectorAll("[data-view-alarm]").forEach(button => button.addEventListener("click", () => openAlarmHistory(button.dataset.viewAlarm)));
@@ -1103,31 +1959,52 @@ function bindPageEvents() {
     window.sessionStorage.setItem("cams.trendParameter", state.trendParameter);
     renderApp();
   });
-  document.querySelectorAll("[data-range]").forEach(button => button.addEventListener("click", () => {
-    state.trendRange = button.dataset.range;
+  document.querySelector("#trend-range")?.addEventListener("change", event => {
+    state.customDatePicker = null;
+    state.customDatePickerSelecting = null;
+    state.trendRange = event.target.value;
     renderApp();
-    loadMachineHistory(state.trendMachine, state.trendRange).catch(error => showToast(error.message));
-  }));
-  document.querySelectorAll("[data-detail-range]").forEach(button => button.addEventListener("click", () => {
-    state.detailRange = button.dataset.detailRange;
+    if (state.trendRange !== "custom") loadMachineHistory(state.trendMachine, state.trendRange).catch(error => showToast(error.message));
+  });
+  document.querySelector("#detail-range")?.addEventListener("change", event => {
+    state.customDatePicker = null;
+    state.customDatePickerSelecting = null;
+    state.detailRange = event.target.value;
     renderApp();
-    loadMachineHistory(state.machineId, state.detailRange).catch(error => showToast(error.message));
-  }));
+    if (state.detailRange !== "custom") loadMachineHistory(state.machineId, state.detailRange).catch(error => showToast(error.message));
+  });
   document.querySelector("#detail-parameter")?.addEventListener("change", event => {
     state.detailParameter = event.target.value;
     window.sessionStorage.setItem("cams.detailParameter", state.detailParameter);
     renderApp();
   });
-  document.querySelector("#report-machine")?.addEventListener("change", event => {
-    state.reportMachine = event.target.value;
+  document.querySelector("#settings-form")?.addEventListener("submit", saveSettings);
+  document.querySelector("#machine-limits-form")?.addEventListener("submit", event => {
+    event.preventDefault();
+    if (!state.currentUser?.isOwner || !state.machineLimitsEditing) return;
+    const data = new FormData(event.currentTarget);
+    const number = name => Number(data.get(name));
+    state.machineLimitOverrides[state.machineId] = {
+      pressureBar: { minimum: number("limits.pressureBar.minimum"), maximum: number("limits.pressureBar.maximum") },
+      flowLpm: { minimum: number("limits.flowLpm.minimum"), maximum: number("limits.flowLpm.maximum") },
+      suctionKpa: { minimum: number("limits.suctionKpa.minimum"), maximum: number("limits.suctionKpa.maximum") },
+      temperatureC: { minimum: number("limits.temperatureC.minimum"), maximum: number("limits.temperatureC.maximum") }
+    };
+    window.localStorage.setItem(machineLimitStorageKey, JSON.stringify(state.machineLimitOverrides));
+    state.machineLimitsEditing = false;
+    renderApp();
+    showToast("Device operating limits saved locally.");
+  });
+  document.querySelector("#edit-machine-limits")?.addEventListener("click", () => {
+    if (!state.currentUser?.isOwner) return;
+    state.machineLimitsEditing = true;
     renderApp();
   });
-  document.querySelectorAll("[data-report-range]").forEach(button => button.addEventListener("click", () => {
-    state.reportRange = button.dataset.reportRange;
+  document.querySelector("#refresh-users")?.addEventListener("click", () => loadManagedUsers());
+  document.querySelectorAll("[data-user-account-filter]").forEach(button => button.addEventListener("click", () => {
+    state.userAccountFilter = button.dataset.userAccountFilter === "active" ? "active" : "registered";
     renderApp();
   }));
-  document.querySelector("#settings-form")?.addEventListener("submit", saveSettings);
-  document.querySelector("#refresh-users")?.addEventListener("click", () => loadManagedUsers());
   document.querySelector("#refresh-live-data")?.addEventListener("click", () => {
     const machineId = machines.find(machine => machine.id === state.machineId)?.id;
     if (machineId) loadMachineHistory(machineId, "24h").catch(error => showToast(error.message));
@@ -1161,29 +2038,119 @@ function bindPageEvents() {
       renderApp();
     }
   }));
-  bindDownload("#export-machines", () => "/api/exports/machines/xlsx");
+  document.querySelectorAll("[data-edit-user]").forEach(button => button.addEventListener("click", () => {
+    state.userModal = { user: state.managedUsers.find(user => user.id === button.dataset.editUser) };
+    renderApp();
+  }));
+  document.querySelector("#user-modal-close")?.addEventListener("click", () => { state.userModal = null; renderApp(); });
+  document.querySelector("#user-modal-cancel")?.addEventListener("click", () => { state.userModal = null; renderApp(); });
+  document.querySelectorAll("#edit-user-form [data-password-toggle]").forEach(button => button.addEventListener("click", () => {
+    const input = document.querySelector(`#${button.dataset.passwordToggle}`);
+    input.type = input.type === "password" ? "text" : "password";
+    button.innerHTML = icon(input.type === "password" ? "eye" : "eyeOff");
+    button.setAttribute("aria-label", input.type === "password" ? "Show password" : "Hide password");
+  }));
+  document.querySelector("#edit-user-role")?.addEventListener("change", event => {
+    if (event.target.value === "owner") {
+      const toggle = document.querySelector("#change-password-toggle");
+      toggle.hidden = true;
+      toggle.disabled = true;
+      document.querySelector("#change-password-fields").hidden = true;
+      document.querySelector("#edit-current-password").value = "";
+      document.querySelector("#edit-new-password").value = "";
+    } else {
+      const toggle = document.querySelector("#change-password-toggle");
+      toggle.hidden = false;
+      toggle.disabled = false;
+    }
+  });
+  document.querySelector("#change-password-toggle")?.addEventListener("click", event => {
+    const fields = document.querySelector("#change-password-fields");
+    const open = fields.hidden;
+    fields.hidden = !open;
+    event.currentTarget.classList.toggle("active", open);
+    event.currentTarget.setAttribute("aria-expanded", String(open));
+    if (!open) {
+      document.querySelector("#edit-current-password").value = "";
+      document.querySelector("#edit-new-password").value = "";
+    }
+    state.usersError = "";
+  });
+  document.querySelector("#edit-user-form")?.addEventListener("submit", async event => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const button = document.querySelector('button[type="submit"][form="edit-user-form"]');
+    button.disabled = true;
+    state.usersError = "";
+    try {
+      const values = Object.fromEntries(new FormData(form));
+      values.changePassword = document.querySelector("#change-password-fields")?.hidden === false;
+      const changingAnotherUser = state.userModal.user.id !== state.currentUser?.id;
+      if (values.changePassword && !values.password) {
+        throw new Error("Enter the new password.");
+      }
+      if (values.changePassword && !changingAnotherUser && !values.currentPassword) {
+        throw new Error("Enter your current password.");
+      }
+      await authApi.updateUser(state.userModal.user.id, values);
+      state.userModal = null;
+      await loadManagedUsers({ render: false });
+      renderApp();
+      showToast("CAMS user updated successfully.");
+    } catch (error) {
+      state.usersError = error.message;
+      renderApp();
+    }
+  });
+  document.querySelectorAll("[data-delete-user]").forEach(button => button.addEventListener("click", async () => {
+    if (!window.confirm("Delete this account? It will remain available for restoration.")) return;
+    button.disabled = true;
+    try {
+      await authApi.deleteUser(button.dataset.deleteUser);
+      await loadManagedUsers({ render: false });
+      renderApp();
+      showToast("User account deleted.");
+    } catch (error) {
+      state.usersError = error.message;
+      renderApp();
+    }
+  }));
+  document.querySelectorAll("[data-restore-user]").forEach(button => button.addEventListener("click", async () => {
+    button.disabled = true;
+    try {
+      await authApi.restoreUser(button.dataset.restoreUser);
+      await loadManagedUsers({ render: false });
+      renderApp();
+      showToast("User account restored.");
+    } catch (error) {
+      state.usersError = error.message;
+      renderApp();
+    }
+  }));
+  document.querySelector("#removed-users")?.addEventListener("click", () => { state.usersRemovedOpen = true; renderApp(); });
+  document.querySelector("#removed-users-close")?.addEventListener("click", () => { state.usersRemovedOpen = false; renderApp(); });
+  document.querySelector("#removed-users-cancel")?.addEventListener("click", () => { state.usersRemovedOpen = false; renderApp(); });
+  bindDownload("#export-machines-pdf", () => "/api/exports/machines/pdf");
+  bindDownload("#export-machines-xlsx", () => "/api/exports/machines/xlsx");
   bindDownload("#export-machine-xlsx", () => telemetryExportPath(state.machineId, "1h", "xlsx"));
   bindDownload("#export-machine-pdf", () => telemetryExportPath(state.machineId, "1h", "pdf"));
   bindDownload("#export-trend-xlsx", () => telemetryExportPath(state.trendMachine, state.trendRange, "xlsx"));
   bindDownload("#export-trend-pdf", () => telemetryExportPath(state.trendMachine, state.trendRange, "pdf"));
-  bindDownload("#report-telemetry-xlsx", () => telemetryExportPath(state.reportMachine, state.reportRange, "xlsx"));
-  bindDownload("#report-telemetry-pdf", () => telemetryExportPath(state.reportMachine, state.reportRange, "pdf"));
-  bindDownload("#report-fleet-xlsx", () => "/api/exports/machines/xlsx");
-  bindDownload("#report-fleet-pdf", () => "/api/exports/machines/pdf");
-  document.querySelector("#export-alarms")?.addEventListener("click", () => showToast("Alarm exports will be enabled when real alarm storage is connected."));
+  bindDownload("#export-alarms", () => "/api/exports/alarms/xlsx");
   bindConnectedProcessChart();
 }
 
 function settingsPayload(form) {
   const data = new FormData(form);
-  const number = name => Number(data.get(name));
+  const number = (name, fallback) => data.has(name) ? Number(data.get(name)) : fallback;
+  const thresholds = state.settings?.thresholds || {};
   return {
     siteId: state.settings?.siteId || "plant-01",
     plant: { name: data.get("plant.name"), area: data.get("plant.area"), shift: data.get("plant.shift") },
     thresholds: {
-      pressureBar: { minimum: number("thresholds.pressureBar.minimum"), maximum: number("thresholds.pressureBar.maximum") },
-      flowLpm: { minimum: number("thresholds.flowLpm.minimum"), maximum: number("thresholds.flowLpm.maximum") },
-      suctionKpa: { minimum: number("thresholds.suctionKpa.minimum"), maximum: number("thresholds.suctionKpa.maximum") }
+      pressureBar: { minimum: number("thresholds.pressureBar.minimum", thresholds.pressureBar?.minimum), maximum: number("thresholds.pressureBar.maximum", thresholds.pressureBar?.maximum) },
+      flowLpm: { minimum: number("thresholds.flowLpm.minimum", thresholds.flowLpm?.minimum), maximum: number("thresholds.flowLpm.maximum", thresholds.flowLpm?.maximum) },
+      suctionKpa: { minimum: number("thresholds.suctionKpa.minimum", thresholds.suctionKpa?.minimum), maximum: number("thresholds.suctionKpa.maximum", thresholds.suctionKpa?.maximum) }
     },
     sampling: { intervalSeconds: number("sampling.intervalSeconds"), staleAfterSeconds: number("sampling.staleAfterSeconds") },
     retentionDays: number("retentionDays"),
@@ -1278,16 +2245,35 @@ async function updateAlarm(id, nextStatus, comment) {
 
 function navigate(page) {
   if (page === "users" && !state.currentUser?.isOwner) return;
+  if (page !== "machine-detail") state.machineLimitsEditing = false;
   state.page = page;
   state.mobileOpen = false;
   renderApp();
+  if (page === "tickets") {
+    loadTickets().then(tickets => {
+      state.ticketRecords = tickets;
+      state.ticketsError = "";
+      if (state.page === "tickets") renderApp();
+    }).catch(error => {
+      state.ticketsError = error.message;
+      if (state.page === "tickets") renderApp();
+    });
+  }
+  if (page === "ticket-detail") {
+    Promise.all([loadTicket(state.ticketId), loadOperators()]).then(([, operators]) => {
+      state.ticketOperators = operators;
+      state.ticketRecords = listTickets();
+      if (state.page === "ticket-detail") renderApp();
+    }).catch(error => showToast(error.message));
+  }
   if (page === "trends" && state.trendMachine) {
     loadMachineHistory(state.trendMachine, state.trendRange).catch(error => showToast(error.message));
   }
-  if (page === "live-data") {
+  if (page === "machines" && state.machineView === "live") {
     const machineId = machines.find(machine => machine.id === state.machineId)?.id;
     if (machineId) loadMachineHistory(machineId, "24h").catch(error => showToast(error.message));
   }
+  if (page === "maintenance") loadMaintenance(state, authApi, renderApp);
   if (page === "users") loadManagedUsers().catch(error => showToast(error.message));
   window.scrollTo({ top: 0, behavior: "smooth" });
 }

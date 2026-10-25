@@ -13,8 +13,8 @@ historical trend charts to the CAMS API. Live MQTT readings reach the browser
 through an authenticated server-sent event stream.
 The Live Data page presents stored samples as
 `CAMS → CAMS-01 → date → time → values` without reading Docker logs.
-Dashboard, Machines, Trends, and Reports continue to use the same authenticated
-MongoDB telemetry, so the existing CAMS webpage design remains the operator view.
+Dashboard, Machines, and Trends continue to use the same authenticated MongoDB
+telemetry, so the existing CAMS webpage design remains the operator view.
 
 ## Responsible team member
 
@@ -30,7 +30,8 @@ results, status updates, and helping reviewers understand the UI.
 The review-stage UI and its local real-data path are complete. Authentication,
 MongoDB, MQTT ingestion, protected telemetry APIs, and live dashboard updates
 work in the local integration environment. Production services are not configured.
-Authenticated machine-fleet and telemetry exports are available in XLSX and PDF.
+Authenticated machine-fleet exports are available in XLSX; telemetry exports are
+available in XLSX and PDF.
 
 ## Hardware requirements
 
@@ -80,7 +81,6 @@ cams-webpage/
     ├── trends.js
     ├── alarms.js
     ├── maintenance.js
-    ├── reports.js
     ├── users.js
     ├── settings.js
     ├── energy.js
@@ -148,10 +148,10 @@ connections, responsive rules, and core UI modules pass validation.
 10. Change machine, parameter, and time range on Trends and verify the chart and
    statistics use stored telemetry readings.
 11. Filter alarms and test View, Acknowledge, and Resolve.
-12. Review Maintenance, Reports, Settings, and Energy preview screens.
+12. Review Maintenance, Settings, and Energy preview screens.
 13. Repeat at tablet and mobile widths, including the mobile sidebar.
 14. Check the browser console for errors.
-15. Open Reports and download telemetry and fleet files in both XLSX and PDF.
+15. Use the available XLSX and PDF downloads on device details and Trends.
 
 ### Recorded test result
 
@@ -181,9 +181,11 @@ connections, responsive rules, and core UI modules pass validation.
 - Three calibrated sensor fields and PLC diagnostics: implemented locally
 - Live dashboard and stored trend integration: implemented locally
 - Authenticated XLSX and PDF exports: implemented locally
+- Alarm and event history XLSX export: implemented locally
 - Same-origin production web/API container: implemented locally
 - Authentication database integration: implemented locally
-- Owner-only user list, account creation, and access controls: implemented locally
+- Owner-only user list, account creation, editing, reversible deletion/restoration,
+  and access controls: implemented locally
 - One-time password reset and session revocation: implemented locally
 - Production authentication deployment: not started
 

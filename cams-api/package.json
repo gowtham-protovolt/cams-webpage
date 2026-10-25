@@ -9,6 +9,7 @@
     "start": "node src/server.js",
     "test": "node --test --test-concurrency=1",
     "create-admin": "node scripts/create-admin.js",
+    "create-operator": "node scripts/create-operator.js",
     "seed-machines": "node scripts/seed-machines.js"
   },
   "engines": {
