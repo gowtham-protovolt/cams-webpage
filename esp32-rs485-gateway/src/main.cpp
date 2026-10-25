@@ -3,6 +3,7 @@
 #include <ModbusMaster.h>
 #include <MQTT.h>
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
 #include <sys/time.h>
 #include <time.h>
 
@@ -19,7 +20,7 @@
 
 HardwareSerial plcSerial(2);
 ModbusMaster plc;
-WiFiClient networkClient;
+WiFiClientSecure networkClient;
 MQTTClient mqttClient(1536);
 OfflineTelemetryQueue telemetryQueue;
 
@@ -266,6 +267,13 @@ void setup() {
   plc.postTransmission(enableRs485Receive);
 
   WiFi.mode(WIFI_STA);
+#ifdef MQTT_CA_CERT
+  networkClient.setCACert(MQTT_CA_CERT);
+#else
+  // Keep the cloud connection encrypted during commissioning. Add the EMQX
+  // deployment CA certificate to secrets.h before production rollout.
+  networkClient.setInsecure();
+#endif
   mqttClient.begin(MQTT_HOST, MQTT_PORT, networkClient);
   mqttClient.onMessage(handleMqttMessage);
   mqttClient.setWill(STATUS_TOPIC, OFFLINE_STATUS_PAYLOAD, true, 1);
