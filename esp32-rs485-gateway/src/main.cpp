@@ -3,15 +3,23 @@
 #include <ModbusMaster.h>
 #include <MQTT.h>
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
 #include <sys/time.h>
 #include <time.h>
 
 #include "config.h"
 #include "secrets.h"
 
+#ifndef CAMS_MQTT_USERNAME
+#define CAMS_MQTT_USERNAME MQTT_USERNAME_CAMS_01
+#endif
+#ifndef CAMS_MQTT_PASSWORD
+#define CAMS_MQTT_PASSWORD MQTT_PASSWORD_CAMS_01
+#endif
+
 HardwareSerial plcSerial(2);
 ModbusMaster plc;
-WiFiClient networkClient;
+WiFiClientSecure networkClient;
 MQTTClient mqttClient(1536);
 
 struct PlcSample {
@@ -119,8 +127,8 @@ void connectMqtt() {
   if (now - lastMqttAttempt < MQTT_RETRY_MS) return;
   lastMqttAttempt = now;
   Serial.println("[mqtt] connecting");
-  if (mqttClient.connect(MQTT_CLIENT_ID, MQTT_USERNAME, MQTT_PASSWORD)) {
-    mqttClient.publish(STATUS_TOPIC, "{\"status\":\"online\"}", true, 1);
+  if (mqttClient.connect(MQTT_CLIENT_ID, CAMS_MQTT_USERNAME, CAMS_MQTT_PASSWORD)) {
+    mqttClient.publish(STATUS_TOPIC, ONLINE_STATUS_PAYLOAD, true, 1);
     Serial.println("[mqtt] connected");
   }
 }
@@ -198,8 +206,15 @@ void setup() {
   plc.postTransmission(enableRs485Receive);
 
   WiFi.mode(WIFI_STA);
+#ifdef MQTT_CA_CERT
+  networkClient.setCACert(MQTT_CA_CERT);
+#else
+  // TLS remains encrypted. Define MQTT_CA_CERT in secrets.h to also verify
+  // the broker certificate before production rollout.
+  networkClient.setInsecure();
+#endif
   mqttClient.begin(MQTT_HOST, MQTT_PORT, networkClient);
-  mqttClient.setWill(STATUS_TOPIC, "{\"status\":\"offline\"}", true, 1);
+  mqttClient.setWill(STATUS_TOPIC, OFFLINE_STATUS_PAYLOAD, true, 1);
   configTime(0, 0, "pool.ntp.org", "time.google.com");
   connectWifi();
   nextSampleAt = millis() + SAMPLE_INTERVAL_MS;
