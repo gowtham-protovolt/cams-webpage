@@ -28,6 +28,8 @@ test("accepts secure same-origin production configuration", () => {
   const config = JSON.parse(result.stdout);
   assert.equal(config.serveWeb, true);
   assert.equal(config.cookie.sameSite, "lax");
+  assert.equal(config.monitoring.staleAfterSeconds, 10);
+  assert.deepEqual(config.monitoring.thresholds.pressureBar, { minimum: 6.8, maximum: 7.5 });
 });
 
 test("rejects insecure production origins and MQTT credentials", () => {

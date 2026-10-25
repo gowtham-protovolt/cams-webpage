@@ -21,15 +21,21 @@ services:
     environment:
       MQTT_BACKEND_USERNAME: ${MQTT_USERNAME:?Set MQTT_USERNAME in cams-api/.env}
       MQTT_BACKEND_PASSWORD: ${MQTT_PASSWORD:?Set MQTT_PASSWORD in cams-api/.env}
-      MQTT_DEVICE_USERNAME: ${MQTT_DEVICE_USERNAME:?Set MQTT_DEVICE_USERNAME in cams-api/.env}
-      MQTT_DEVICE_PASSWORD: ${MQTT_DEVICE_PASSWORD:?Set MQTT_DEVICE_PASSWORD in cams-api/.env}
+      MQTT_DEVICE_01_USERNAME: ${MQTT_DEVICE_USERNAME:?Set MQTT_DEVICE_USERNAME in cams-api/.env}
+      MQTT_DEVICE_01_PASSWORD: ${MQTT_DEVICE_PASSWORD:?Set MQTT_DEVICE_PASSWORD in cams-api/.env}
+      MQTT_DEVICE_02_USERNAME: ${MQTT_DEVICE_02_USERNAME:?Set MQTT_DEVICE_02_USERNAME in cams-api/.env}
+      MQTT_DEVICE_02_PASSWORD: ${MQTT_DEVICE_02_PASSWORD:?Set MQTT_DEVICE_02_PASSWORD in cams-api/.env}
+      MQTT_DEVICE_03_USERNAME: ${MQTT_DEVICE_03_USERNAME:?Set MQTT_DEVICE_03_USERNAME in cams-api/.env}
+      MQTT_DEVICE_03_PASSWORD: ${MQTT_DEVICE_03_PASSWORD:?Set MQTT_DEVICE_03_PASSWORD in cams-api/.env}
     entrypoint: ["/bin/sh", "-ec"]
     command:
       - |
         rm -f /mosquitto/secrets/passwords /mosquitto/secrets/acl
         mosquitto_passwd -b -c /mosquitto/secrets/passwords "$$MQTT_BACKEND_USERNAME" "$$MQTT_BACKEND_PASSWORD"
-        mosquitto_passwd -b /mosquitto/secrets/passwords "$$MQTT_DEVICE_USERNAME" "$$MQTT_DEVICE_PASSWORD"
-        printf 'user %s\ntopic read cams/+/+/telemetry\ntopic read cams/+/+/status\n\nuser %s\ntopic write cams/plant-01/CAMS-01/telemetry\ntopic write cams/plant-01/CAMS-01/status\n' "$$MQTT_BACKEND_USERNAME" "$$MQTT_DEVICE_USERNAME" > /mosquitto/secrets/acl
+        mosquitto_passwd -b /mosquitto/secrets/passwords "$$MQTT_DEVICE_01_USERNAME" "$$MQTT_DEVICE_01_PASSWORD"
+        mosquitto_passwd -b /mosquitto/secrets/passwords "$$MQTT_DEVICE_02_USERNAME" "$$MQTT_DEVICE_02_PASSWORD"
+        mosquitto_passwd -b /mosquitto/secrets/passwords "$$MQTT_DEVICE_03_USERNAME" "$$MQTT_DEVICE_03_PASSWORD"
+        printf 'user %s\ntopic read cams/+/+/telemetry\ntopic read cams/+/+/status\n\nuser %s\ntopic write cams/plant-01/CAMS-01/telemetry\ntopic write cams/plant-01/CAMS-01/status\n\nuser %s\ntopic write cams/plant-01/CAMS-02/telemetry\ntopic write cams/plant-01/CAMS-02/status\n\nuser %s\ntopic write cams/plant-01/CAMS-03/telemetry\ntopic write cams/plant-01/CAMS-03/status\n' "$$MQTT_BACKEND_USERNAME" "$$MQTT_DEVICE_01_USERNAME" "$$MQTT_DEVICE_02_USERNAME" "$$MQTT_DEVICE_03_USERNAME" > /mosquitto/secrets/acl
         chown -R 1883:1883 /mosquitto/secrets /mosquitto/data
         chmod 0600 /mosquitto/secrets/passwords /mosquitto/secrets/acl
     volumes:
@@ -80,11 +86,19 @@ services:
       SESSION_HOURS: 8
       REMEMBER_SESSION_DAYS: 7
       TELEMETRY_RETENTION_DAYS: 7
+      TELEMETRY_STALE_SECONDS: ${TELEMETRY_STALE_SECONDS:-10}
+      PRESSURE_BAR_MIN: ${PRESSURE_BAR_MIN:-6.8}
+      PRESSURE_BAR_MAX: ${PRESSURE_BAR_MAX:-7.5}
+      FLOW_LPM_MIN: ${FLOW_LPM_MIN:-22}
+      FLOW_LPM_MAX: ${FLOW_LPM_MAX:-28}
+      SUCTION_KPA_MIN: ${SUCTION_KPA_MIN:-0.6}
+      SUCTION_KPA_MAX: ${SUCTION_KPA_MAX:-1.8}
       MQTT_ENABLED: "true"
       MQTT_URL: mqtt://mqtt:1883
       MQTT_USERNAME: ${MQTT_USERNAME:?Set MQTT_USERNAME in cams-api/.env}
       MQTT_PASSWORD: ${MQTT_PASSWORD:?Set MQTT_PASSWORD in cams-api/.env}
       MQTT_TOPIC: cams/+/+/telemetry
+      MQTT_STATUS_TOPIC: cams/+/+/status
       MQTT_CLIENT_ID: cams-api-docker
 
 volumes:

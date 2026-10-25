@@ -10,6 +10,7 @@ import { telemetryRouter } from "./routes/telemetry.js";
 import { getMqttStatus } from "./telemetry/mqtt.js";
 import { exportsRouter } from "./routes/exports.js";
 import { usersRouter } from "./routes/users.js";
+import { settingsRouter } from "./routes/settings.js";
 
 export function createApp(config) {
   const app = express();
@@ -53,7 +54,8 @@ export function createApp(config) {
   });
   app.use("/api/auth", authRouter(config));
   app.use("/api/admin", usersRouter());
-  app.use("/api", telemetryRouter());
+  app.use("/api", settingsRouter(config));
+  app.use("/api", telemetryRouter(config));
   app.use("/api", exportsRouter());
 
   if (config.serveWeb) {

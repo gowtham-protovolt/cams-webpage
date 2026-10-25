@@ -33,3 +33,13 @@ test("builds the required CAMS machine, date, time, and three-value tree", () =>
     }
   });
 });
+
+test("groups readings under different CAMS machine IDs", () => {
+  const reading = machineId => ({
+    series: { siteId: "plant-01", machineId },
+    hierarchy: { root: "CAMS", device: machineId, date: "2026-10-07", time: "21-00-00", timezone: "Asia/Kolkata" },
+    metrics: { flowLpm: 2.3, pressureBar: 6.8, suctionKpa: 1.1 }
+  });
+  const tree = buildTelemetryTree([reading("CAMS-01"), reading("CAMS-02"), reading("CAMS-03")]);
+  assert.deepEqual(Object.keys(tree.CAMS), ["CAMS-01", "CAMS-02", "CAMS-03"]);
+});

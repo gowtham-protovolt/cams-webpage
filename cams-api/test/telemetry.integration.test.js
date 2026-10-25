@@ -15,7 +15,9 @@ test("stores telemetry, updates latest data, and rejects a duplicate sequence", 
     db.collection("telemetry").deleteMany({}),
     db.collection("telemetryReceipts").deleteMany({}),
     db.collection("latestTelemetry").deleteMany({}),
-    db.collection("machines").deleteMany({})
+    db.collection("machines").deleteMany({}),
+    db.collection("deviceStatus").deleteMany({}),
+    db.collection("alarms").deleteMany({})
   ]);
   const now = new Date();
   const payload = Buffer.from(JSON.stringify({
@@ -32,9 +34,11 @@ test("stores telemetry, updates latest data, and rejects a duplicate sequence", 
   const telemetry = parseTelemetryMessage("cams/demo/CAMS-01/telemetry", payload, now);
 
   try {
-    assert.deepEqual(await ingestTelemetry(telemetry, 90), {
-      duplicate: false,
-      latest: {
+    const stored = await ingestTelemetry(telemetry, 90);
+    assert.equal(stored.duplicate, false);
+    assert.equal(stored.latest.monitoring.status, "running");
+    assert.equal(stored.latest.monitoring.health, 92);
+    assert.deepEqual({ ...stored.latest, monitoring: undefined }, {
         siteId: "demo",
         machineId: "CAMS-01",
         hierarchy: telemetry.hierarchy,
@@ -47,8 +51,8 @@ test("stores telemetry, updates latest data, and rejects a duplicate sequence", 
         errors: telemetry.errors,
         quality: telemetry.quality,
         calibrationVersion: telemetry.calibrationVersion,
-        source: telemetry.source
-      }
+        source: telemetry.source,
+        monitoring: undefined
     });
     assert.deepEqual(await ingestTelemetry(telemetry, 90), { duplicate: true });
     assert.equal(await db.collection("telemetry").countDocuments({}), 1);

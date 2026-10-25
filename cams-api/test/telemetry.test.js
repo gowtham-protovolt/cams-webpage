@@ -32,6 +32,14 @@ test("parses a valid CAMS MQTT telemetry message", () => {
   });
 });
 
+test("keeps CAMS-01, CAMS-02, and CAMS-03 telemetry identities separate", () => {
+  for (const machineId of ["CAMS-01", "CAMS-02", "CAMS-03"]) {
+    const telemetry = parseTelemetryMessage(`cams/plant-01/${machineId}/telemetry`, validPayload, now);
+    assert.equal(telemetry.series.machineId, machineId);
+    assert.equal(telemetry.hierarchy.device, machineId);
+  }
+});
+
 test("rejects malformed topics and out-of-range values", () => {
   assert.throws(() => parseTelemetryMessage("bad/topic", validPayload, now), /topic/);
   const invalid = Buffer.from(JSON.stringify({

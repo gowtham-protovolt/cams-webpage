@@ -45,6 +45,8 @@ async function ensureIndexes(db) {
     db.collection("sessions").createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0, name: "expire_sessions" }),
     db.collection("sessions").createIndex({ userId: 1 }, { name: "sessions_by_user" }),
     db.collection("machines").createIndex({ siteId: 1, machineId: 1 }, { unique: true, name: "unique_machine" }),
+    db.collection("deviceStatus").createIndex({ siteId: 1, machineId: 1 }, { unique: true, name: "unique_device_status" }),
+    db.collection("alarms").createIndex({ siteId: 1, machineId: 1, status: 1, lastSeenAt: -1 }, { name: "alarms_by_machine_status" }),
     db.collection("latestTelemetry").createIndex({ siteId: 1, machineId: 1 }, { unique: true, name: "unique_latest_machine" }),
     db.collection("telemetryReceipts").createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0, name: "expire_receipts" }),
     db.collection("telemetry").createIndex({ "series.siteId": 1, "series.machineId": 1, observedAt: -1 }, { name: "telemetry_by_machine_time" }),
