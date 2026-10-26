@@ -199,6 +199,12 @@ export const parameterQualityField = {
   Temperature: "temperature"
 };
 
+export const parameterQualityField = {
+  Pressure: "pressure",
+  Flow: "flow",
+  Suction: "suction"
+};
+
 export function historyFor(machineHistory, machineId, parameter) {
   const config = parameterConfig[parameter] || parameterConfig.Pressure;
   const qualityField = parameterQualityField[parameter] || "pressure";
