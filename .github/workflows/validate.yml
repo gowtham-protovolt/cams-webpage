@@ -84,4 +84,11 @@ jobs:
 
       - name: Validate Nginx configuration
         working-directory: ${{ github.workspace }}/cams-api
-        run: docker run --rm -v "$PWD/docker/nginx/nginx.conf:/etc/nginx/nginx.conf:ro" nginx:1.27-alpine nginx -t
+        run: >-
+          docker run --rm
+          --add-host api-1:127.0.0.1
+          --add-host api-2:127.0.0.1
+          --add-host api-3:127.0.0.1
+          --add-host api-4:127.0.0.1
+          -v "$PWD/docker/nginx/nginx.conf:/etc/nginx/nginx.conf:ro"
+          nginx:1.27-alpine nginx -t
