@@ -70,3 +70,18 @@ jobs:
       - name: Build production container
         working-directory: ${{ github.workspace }}
         run: docker build -f cams-api/Dockerfile -t cams-webpage:ci .
+
+      - name: Validate load-balanced Compose configuration
+        working-directory: ${{ github.workspace }}/cams-api
+        env:
+          MONGO_INITDB_ROOT_USERNAME: ci-root
+          MONGO_INITDB_ROOT_PASSWORD: ci-root-password
+          MONGODB_APP_USERNAME: ci-app
+          MONGODB_APP_PASSWORD: ci-app-password
+          MQTT_USERNAME: ci-mqtt
+          MQTT_PASSWORD: ci-mqtt-password
+        run: docker compose config --quiet
+
+      - name: Validate Nginx configuration
+        working-directory: ${{ github.workspace }}/cams-api
+        run: docker run --rm -v "$PWD/docker/nginx/nginx.conf:/etc/nginx/nginx.conf:ro" nginx:1.27-alpine nginx -t

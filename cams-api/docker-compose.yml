@@ -1,3 +1,48 @@
+x-app-environment: &app-environment
+  NODE_ENV: development
+  PORT: 3000
+  SERVE_WEB: "true"
+  WEB_ROOT: /app/public
+  MONGODB_URI: mongodb://${MONGODB_APP_USERNAME:?Set MONGODB_APP_USERNAME in cams-api/.env}:${MONGODB_APP_PASSWORD:?Set MONGODB_APP_PASSWORD in cams-api/.env}@mongodb:27017/${MONGODB_DB:-cams_local}?authSource=${MONGODB_DB:-cams_local}
+  MONGODB_DB: ${MONGODB_DB:-cams_local}
+  REDIS_URL: redis://redis:6379
+  CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8080,http://127.0.0.1:8080,http://localhost:3100,http://127.0.0.1:3100}
+  COOKIE_NAME: cams_session
+  COOKIE_SECURE: "false"
+  COOKIE_SAME_SITE: lax
+  SESSION_HOURS: 8
+  REMEMBER_SESSION_DAYS: 7
+  PASSWORD_RESET_MINUTES: ${PASSWORD_RESET_MINUTES:-30}
+  PASSWORD_RESET_BASE_URL: ${PASSWORD_RESET_BASE_URL:-http://localhost:3100}
+  TELEMETRY_RETENTION_DAYS: ${TELEMETRY_RETENTION_DAYS:-90}
+  TELEMETRY_STALE_SECONDS: ${TELEMETRY_STALE_SECONDS:-10}
+  AUTO_REGISTER_DEVICES: ${AUTO_REGISTER_DEVICES:-true}
+  PRESSURE_BAR_MIN: ${PRESSURE_BAR_MIN:-6.8}
+  PRESSURE_BAR_MAX: ${PRESSURE_BAR_MAX:-7.5}
+  FLOW_LPM_MIN: ${FLOW_LPM_MIN:-22}
+  FLOW_LPM_MAX: ${FLOW_LPM_MAX:-28}
+  SUCTION_KPA_MIN: ${SUCTION_KPA_MIN:-0.6}
+  SUCTION_KPA_MAX: ${SUCTION_KPA_MAX:-1.8}
+  MQTT_USERNAME: ${MQTT_USERNAME:?Set MQTT_USERNAME in cams-api/.env}
+  MQTT_PASSWORD: ${MQTT_PASSWORD:?Set MQTT_PASSWORD in cams-api/.env}
+
+x-api-service: &api-service
+  build:
+    context: ..
+    dockerfile: cams-api/Dockerfile
+  restart: unless-stopped
+  depends_on:
+    mongodb:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+  expose:
+    - "3000"
+  environment:
+    <<: *app-environment
+    MQTT_ENABLED: "false"
+    BACKGROUND_JOBS_ENABLED: "false"
+
 services:
   mongodb:
     image: mongo:7.0.43
@@ -77,50 +122,75 @@ services:
       - cams-mqtt-data:/mosquitto/data
       - cams-mqtt-log:/mosquitto/log
 
-  app:
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxclients", "10000"]
+    expose:
+      - "6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api-1:
+    <<: *api-service
+
+  api-2:
+    <<: *api-service
+
+  api-3:
+    <<: *api-service
+
+  api-4:
+    <<: *api-service
+
+  worker:
     build:
       context: ..
       dockerfile: cams-api/Dockerfile
-    container_name: CAMS
     restart: unless-stopped
     depends_on:
       mongodb:
         condition: service_healthy
+      redis:
+        condition: service_healthy
       mqtt:
         condition: service_started
-    ports:
-      - "3100:3000"
+    expose:
+      - "3000"
     environment:
-      NODE_ENV: development
-      PORT: 3000
-      SERVE_WEB: "true"
-      WEB_ROOT: /app/public
-      MONGODB_URI: mongodb://${MONGODB_APP_USERNAME:?Set MONGODB_APP_USERNAME in cams-api/.env}:${MONGODB_APP_PASSWORD:?Set MONGODB_APP_PASSWORD in cams-api/.env}@mongodb:27017/${MONGODB_DB:-cams_local}?authSource=${MONGODB_DB:-cams_local}
-      MONGODB_DB: ${MONGODB_DB:-cams_local}
-      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8080,http://127.0.0.1:8080,http://localhost:3100,http://127.0.0.1:3100}
-      COOKIE_NAME: cams_session
-      COOKIE_SECURE: "false"
-      COOKIE_SAME_SITE: lax
-      SESSION_HOURS: 8
-      REMEMBER_SESSION_DAYS: 7
-      PASSWORD_RESET_MINUTES: ${PASSWORD_RESET_MINUTES:-30}
-      PASSWORD_RESET_BASE_URL: ${PASSWORD_RESET_BASE_URL:-http://localhost:3100}
-      TELEMETRY_RETENTION_DAYS: ${TELEMETRY_RETENTION_DAYS:-90}
-      TELEMETRY_STALE_SECONDS: ${TELEMETRY_STALE_SECONDS:-10}
-      AUTO_REGISTER_DEVICES: ${AUTO_REGISTER_DEVICES:-true}
-      PRESSURE_BAR_MIN: ${PRESSURE_BAR_MIN:-6.8}
-      PRESSURE_BAR_MAX: ${PRESSURE_BAR_MAX:-7.5}
-      FLOW_LPM_MIN: ${FLOW_LPM_MIN:-22}
-      FLOW_LPM_MAX: ${FLOW_LPM_MAX:-28}
-      SUCTION_KPA_MIN: ${SUCTION_KPA_MIN:-0.6}
-      SUCTION_KPA_MAX: ${SUCTION_KPA_MAX:-1.8}
+      <<: *app-environment
+      SERVE_WEB: "false"
       MQTT_ENABLED: "true"
+      BACKGROUND_JOBS_ENABLED: "true"
       MQTT_URL: mqtt://mqtt:1883
-      MQTT_USERNAME: ${MQTT_USERNAME:?Set MQTT_USERNAME in cams-api/.env}
-      MQTT_PASSWORD: ${MQTT_PASSWORD:?Set MQTT_PASSWORD in cams-api/.env}
       MQTT_TOPIC: cams/+/+/telemetry
       MQTT_STATUS_TOPIC: cams/+/+/status
-      MQTT_CLIENT_ID: cams-api-docker
+      MQTT_CLIENT_ID: cams-ingestion-worker
+
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    depends_on:
+      api-1:
+        condition: service_healthy
+      api-2:
+        condition: service_healthy
+      api-3:
+        condition: service_healthy
+      api-4:
+        condition: service_healthy
+    ports:
+      - "3100:8080"
+    volumes:
+      - ./docker/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/nginx-health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
 
 volumes:
   cams-mongodb-data:

@@ -56,7 +56,7 @@ test("one ticket per incident escalates every two unresolved hours and permits a
     assert.equal(tickets[0].alarmPriority, "Critical");
     assert.match(tickets[0].description, /^1\. Pressure: Pressure is above its limit\.$/);
     assert.equal((await getTicket(siteId, firstId)).activity[0].action, "Ticket created");
-    const categorized = await updateTicket(siteId, firstId, { category: "Flow" }, actor, now);
+    const categorized = await updateTicket(siteId, firstId, { category: "Flow" }, actor, new Date(now.getTime() + 1));
     assert.equal(categorized.category, "Flow");
     assert.equal(categorized.activity[0].action, "Category changed");
 

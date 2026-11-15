@@ -65,9 +65,13 @@ To run the complete local stack in Docker:
 docker compose up -d --build
 ```
 
-Open <http://localhost:3100>. Docker should show `CAMS`, `CAMS-MongoDB`, and
-`CAMS-Mosquitto`. The one-time `CAMS-MQTT-Config` container exits successfully
-after creating credentials.
+Open <http://localhost:3100>. Docker should show Nginx, `api-1` through `api-4`,
+`worker`, Redis, `CAMS-MongoDB`, and `CAMS-Mosquitto`. Nginx balances requests
+across `api-1` through `api-4`, Redis
+distributes live events, and `worker` is the only service that subscribes to
+MQTT and runs background schedulers. The one-time `CAMS-MQTT-Config` container
+exits successfully after creating credentials. See
+[`../NGINX-1000-USERS.md`](../NGINX-1000-USERS.md) for the 1,000-user load test.
 
 The local broker requires separate backend and per-device credentials. Its ACL
 restricts CAMS-01, CAMS-02, and CAMS-03 to their own telemetry and status topics.

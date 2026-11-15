@@ -53,6 +53,12 @@ production deployment remains the final infrastructure step.
 
 ## Production hosting
 
+For the on-premise deployment supporting up to 1,000 concurrent browser users,
+the maintained Docker Compose stack uses Nginx, four API replicas, one dedicated
+MQTT/background worker, Redis Pub/Sub, MongoDB, and Mosquitto. See
+[`NGINX-1000-USERS.md`](NGINX-1000-USERS.md) for startup, verification, and k6
+load-testing instructions.
+
 The deployment target is split between:
 
 - GitHub Pages frontend: `https://gowtham-protovolt.github.io/cams-webpage/`

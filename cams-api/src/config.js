@@ -101,6 +101,8 @@ export function loadConfig() {
     passwordResetBaseUrl: (process.env.PASSWORD_RESET_BASE_URL || allowedOrigins[0]).replace(/\/$/, ""),
     telemetryRetentionDays: integer("TELEMETRY_RETENTION_DAYS", 7),
     autoRegisterDevices: process.env.AUTO_REGISTER_DEVICES === "true",
+    backgroundJobsEnabled: boolean("BACKGROUND_JOBS_ENABLED", true),
+    redisUrl: process.env.REDIS_URL?.trim() || "",
     monitoring: {
       staleAfterSeconds: integer("TELEMETRY_STALE_SECONDS", 10, 3),
       thresholds: {
