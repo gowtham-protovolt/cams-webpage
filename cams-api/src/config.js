@@ -36,11 +36,24 @@ function sameSite(value) {
   return value;
 }
 
+function mongoUri() {
+  const configured = process.env.MONGODB_URI?.trim();
+  if (configured) return configured;
+
+  const username = process.env.MONGODB_APP_USERNAME?.trim();
+  const password = process.env.MONGODB_APP_PASSWORD;
+  const database = process.env.MONGODB_DB?.trim() || "cams";
+  const host = process.env.MONGODB_HOST?.trim() || "127.0.0.1:27018";
+  if (!username || !password) {
+    throw new Error("MONGODB_URI or MONGODB_APP_USERNAME and MONGODB_APP_PASSWORD are required.");
+  }
+  return `mongodb://${encodeURIComponent(username)}:${encodeURIComponent(password)}@${host}/${encodeURIComponent(database)}?authSource=${encodeURIComponent(database)}`;
+}
+
 export function loadConfig() {
   const production = process.env.NODE_ENV === "production";
   const serveWeb = boolean("SERVE_WEB", false);
-  const mongoUri = process.env.MONGODB_URI?.trim();
-  if (!mongoUri) throw new Error("MONGODB_URI is required.");
+  const mongoConnectionUri = mongoUri();
 
   const allowedOrigins = (process.env.CORS_ORIGINS || "http://localhost:8080")
     .split(",")
@@ -64,7 +77,7 @@ export function loadConfig() {
   if (production) {
     if (!cookieSecure) throw new Error("COOKIE_SECURE must be true in production.");
     if (allowedOrigins.some(origin => !origin.startsWith("https://"))) throw new Error("Production CORS_ORIGINS must use HTTPS.");
-    if (/^(mongodb:\/\/)?(127\.0\.0\.1|localhost)(:|\/|$)/i.test(mongoUri)) throw new Error("Production MONGODB_URI must not use localhost.");
+    if (/^(mongodb:\/\/)?(127\.0\.0\.1|localhost)(:|\/|$)/i.test(mongoConnectionUri)) throw new Error("Production MONGODB_URI must not use localhost.");
     if (mqttEnabled && (!mqttUsername || !mqttPassword)) throw new Error("Production MQTT requires MQTT_USERNAME and MQTT_PASSWORD.");
   }
 
@@ -74,7 +87,7 @@ export function loadConfig() {
     serveWeb,
     webRoot: path.resolve(process.env.WEB_ROOT?.trim() || "/app/public"),
     port: integer("PORT", 3000),
-    mongoUri,
+    mongoUri: mongoConnectionUri,
     mongoDb: process.env.MONGODB_DB?.trim() || "cams",
     allowedOrigins,
     cookie: {
@@ -87,12 +100,23 @@ export function loadConfig() {
     passwordResetMinutes: integer("PASSWORD_RESET_MINUTES", 30, 5),
     passwordResetBaseUrl: (process.env.PASSWORD_RESET_BASE_URL || allowedOrigins[0]).replace(/\/$/, ""),
     telemetryRetentionDays: integer("TELEMETRY_RETENTION_DAYS", 7),
+    autoRegisterDevices: process.env.AUTO_REGISTER_DEVICES === "true",
     monitoring: {
       staleAfterSeconds: integer("TELEMETRY_STALE_SECONDS", 10, 3),
       thresholds: {
         pressureBar: range("PRESSURE_BAR", 6.8, 7.5),
         flowLpm: range("FLOW_LPM", 22, 28),
-        suctionKpa: range("SUCTION_KPA", 0.6, 1.8)
+        suctionKpa: range("SUCTION_KPA", 0.6, 1.8),
+        powerMonitor: {
+          voltageV: range("POWER_VOLTAGE_V", 0, 1000),
+          currentA: range("POWER_CURRENT_A", 0, 10000),
+          activePowerW: range("POWER_ACTIVE_W", -1e9, 1e9),
+          powerFactor: range("POWER_FACTOR", -1, 1),
+          frequencyHz: range("POWER_FREQUENCY_HZ", 0, 1000),
+          apparentPowerVa: range("POWER_APPARENT_VA", 0, 1e9),
+          reactivePowerVar: range("POWER_REACTIVE_VAR", -1e9, 1e9),
+          powerTotalKwh: range("POWER_TOTAL_KWH", 0, 1e12)
+        }
       }
     },
     mqtt: {

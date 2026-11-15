@@ -8,6 +8,13 @@ function alarmId(siteId, machineId, code) {
   return `${siteId}/${machineId}/${code}`;
 }
 
+export function alarmNeedsTicketReconciliation(existing, condition) {
+  return !existing
+    || existing.status === "Resolved"
+    || existing.severity !== condition.severity
+    || existing.message !== condition.message;
+}
+
 function publicAlarm(alarm) {
   return {
     id: alarm._id,
@@ -79,6 +86,7 @@ async function writeAlarm(siteId, machineId, condition, now) {
   const collection = getDatabase().collection("alarms");
   const _id = alarmId(siteId, machineId, condition.code);
   const existing = await collection.findOne({ _id });
+  const changed = alarmNeedsTicketReconciliation(existing, condition);
   const status = existing?.status === "Acknowledged" ? "Acknowledged" : "Active";
   const alarm = await collection.findOneAndUpdate(
     { _id },
@@ -89,6 +97,7 @@ async function writeAlarm(siteId, machineId, condition, now) {
     { upsert: true, returnDocument: "after" }
   );
   telemetryEvents.emit("alarm", publicAlarm(alarm));
+  return changed;
 }
 
 export async function syncTelemetryAlarms(telemetry, monitoring) {
@@ -96,7 +105,7 @@ export async function syncTelemetryAlarms(telemetry, monitoring) {
   const now = telemetry.receivedAt;
   const active = alarmConditions(telemetry, monitoring);
   const activeCodes = new Set(active.map(item => item.code));
-  await Promise.all(active.map(condition => writeAlarm(siteId, machineId, condition, now)));
+  const changedAlarms = await Promise.all(active.map(condition => writeAlarm(siteId, machineId, condition, now)));
   const query = { siteId, machineId, status: { $ne: "Resolved" }, code: { $ne: "gateway-offline" } };
   const existing = await getDatabase().collection("alarms").find(query).toArray();
   const recovered = existing.filter(alarm => !activeCodes.has(alarm.code));
@@ -114,21 +123,23 @@ export async function syncTelemetryAlarms(telemetry, monitoring) {
     });
     telemetryEvents.emit("alarm", publicAlarm(updated));
   }));
-  await reconcileMachineTickets(siteId, machineId, now);
+  if (changedAlarms.some(Boolean) || recovered.length) {
+    await reconcileMachineTickets(siteId, machineId, now);
+  }
 }
 
 export async function setGatewayAlarm(siteId, machineId, offline, now = new Date()) {
   const _id = alarmId(siteId, machineId, "gateway-offline");
   const collection = getDatabase().collection("alarms");
   if (offline) {
-    await writeAlarm(siteId, machineId, {
+    const changed = await writeAlarm(siteId, machineId, {
       code: "gateway-offline",
       parameter: "Gateway",
       severity: "Critical",
       value: "offline",
       message: "ESP32 gateway is offline or telemetry is stale."
     }, now);
-    await reconcileMachineTickets(siteId, machineId, now);
+    if (changed) await reconcileMachineTickets(siteId, machineId, now);
     return;
   }
   const updated = await collection.findOneAndUpdate(
@@ -144,8 +155,8 @@ export async function setGatewayAlarm(siteId, machineId, offline, now = new Date
       createdAt: now
     });
     telemetryEvents.emit("alarm", publicAlarm(updated));
+    await reconcileMachineTickets(siteId, machineId, now);
   }
-  await reconcileMachineTickets(siteId, machineId, now);
 }
 
 export { publicAlarm, publicAuditEntry };

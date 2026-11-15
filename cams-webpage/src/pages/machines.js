@@ -18,6 +18,10 @@ function machineNumber(machine, fallback) {
   return match ? Number(match[1]) : fallback + 1;
 }
 
+function machineHealth(machine) {
+  return Number.isFinite(machine.health) ? Math.min(100, Math.max(0, machine.health)) : null;
+}
+
 function clusterLayout(machines) {
   return machines.map(machine => {
     return {
@@ -48,7 +52,7 @@ function clusterMachineCard(machine) {
   return `<article class="cluster-machine-card">
     <button class="cluster-machine-main" type="button" data-machine="${escapeHtml(machine.id)}">
       <span class="machine-num">${escapeHtml(String(machineNumber(machine, 0)).padStart(2, "0"))}</span>
-      <span class="cluster-machine-identity"><strong>${escapeHtml(displayName)}</strong><small>${escapeHtml(machine.id)}</small></span>
+      <span class="cluster-machine-identity"><strong>${escapeHtml(displayName)}</strong></span>
       <span class="cluster-device-live ${live ? "live" : "not-live"}"><small>Live data</small><strong><i></i>${live ? "Online" : "Offline"}</strong></span>
       <span class="cluster-machine-updated"><small>Last update</small><strong>${connectionLastUpdate(machine)}</strong></span>
     </button>
@@ -123,7 +127,7 @@ function clusterView(state, filteredMachines, allMachines) {
                   .map(({ machine }) =>
                     clusterMachineCard({
                       ...machine,
-                      ownerActions: state.currentUser?.isOwner
+                      ownerActions: state.currentUser?.isOwner && !state.devicePreviewMode
                         ? `<button class="row-action" data-edit-machine="${escapeHtml(machine.id)}" type="button">Edit</button><button class="row-action danger" data-delete-machine="${escapeHtml(machine.id)}" type="button">Delete</button>`
                         : "",
                     }),
@@ -148,13 +152,13 @@ function machineDialog(state) {
     const rows = state.removedMachines
       .map(
         (machine) => `<div class="removed-machine-row">
-      <div><strong>${escapeHtml(deviceDisplayName(machine))}</strong><span>${escapeHtml(machine.id)} · ${escapeHtml(machine.zone)}</span><small>Removed ${relativeTime(machine.removedAt)}</small></div>
-      <button class="secondary-btn" type="button" data-restore-machine="${escapeHtml(machine.id)}" data-site-id="${escapeHtml(machine.siteId)}">Restore</button>
+      <div><strong>${escapeHtml(deviceDisplayName(machine))}</strong><span>${escapeHtml([machine.cluster, machine.zone].filter(Boolean).join(" · "))}</span><small>Removed ${relativeTime(machine.removedAt)}</small></div>
+      <div class="table-actions"><button class="secondary-btn" type="button" data-restore-machine="${escapeHtml(machine.id)}" data-site-id="${escapeHtml(machine.siteId)}">Restore</button><button class="mini-action danger mini-action-icon" type="button" data-permanent-delete-machine="${escapeHtml(machine.id)}" data-site-id="${escapeHtml(machine.siteId)}" aria-label="Permanently delete ${escapeHtml(deviceDisplayName(machine))}" title="Permanently delete">${icon("trash")}</button></div>
     </div>`,
       )
       .join("");
     return `<div class="machine-modal-backdrop" id="machine-modal-backdrop"><section class="machine-modal" role="dialog" aria-modal="true" aria-labelledby="machine-modal-title">
-      <header><div><span class="machine-modal-kicker">Device lifecycle</span><h2 id="machine-modal-title">Removed devices</h2><p>Restore a device before its MQTT readings can be accepted again.</p></div><button class="machine-modal-close" id="machine-modal-close" type="button" aria-label="Close">×</button></header>
+      <header><div><span class="machine-modal-kicker">Device lifecycle</span><h2 id="machine-modal-title">Removed devices</h2><p>Restore a device or permanently delete it. Historical telemetry, tickets, and audit records are retained.</p></div><button class="machine-modal-close" id="machine-modal-close" type="button" aria-label="Close">×</button></header>
       <div class="removed-machine-list">${state.removedMachinesLoading ? `<div class="machine-modal-state"><span class="loading-spinner dark"></span>Loading removed devices…</div>` : state.machineManagementError ? `<div class="inline-error">${escapeHtml(state.machineManagementError)}</div>` : rows || `<div class="machine-modal-state">No removed devices.</div>`}</div>
       <footer><button class="secondary-btn" id="machine-modal-cancel" type="button">Close</button></footer>
     </section></div>`;
@@ -165,7 +169,7 @@ function machineDialog(state) {
     return `<div class="machine-modal-backdrop" id="machine-modal-backdrop"><section class="machine-modal machine-modal-danger" role="alertdialog" aria-modal="true" aria-labelledby="machine-modal-title">
       <header><div><span class="machine-modal-kicker">Controlled removal</span><h2 id="machine-modal-title">Remove ${escapeHtml(deviceDisplayName(machine))}?</h2><p>The device will disappear from monitoring and its MQTT messages will be ignored until you restore it. Historical telemetry is preserved.</p></div><button class="machine-modal-close" id="machine-modal-close" type="button" aria-label="Close">×</button></header>
       ${state.machineManagementError ? `<div class="inline-error">${escapeHtml(state.machineManagementError)}</div>` : ""}
-      <div class="machine-delete-summary"><strong>${escapeHtml(machine.id)}</strong><span>${escapeHtml(machine.zone)}</span></div>
+      <div class="machine-delete-summary"><strong>${escapeHtml(machine.cluster || "Unassigned")}</strong><span>${escapeHtml(machine.zone || "Unassigned")}</span></div>
       <footer><button class="secondary-btn" id="machine-modal-cancel" type="button">Cancel</button><button class="danger-btn" id="confirm-machine-delete" type="button">Remove device</button></footer>
     </section></div>`;
   }
@@ -215,9 +219,9 @@ export function renderMachinesPage({ state, machines, machineHistory }) {
         (machine.zone || "").toLowerCase().includes(search));
     },
   );
-  const filters = `<button class="filter-pill ${state.machineFilter === "All" && state.machineView === "list" ? "active" : ""}" type="button" data-filter="All" data-machine-view-target="list">All Devices</button>${["Online", "Offline"]
-    .map(filter => `<button class="filter-pill ${state.machineFilter === filter ? "active" : ""}" type="button" data-filter="${filter}">${filter}</button>`)
-    .join("")}`;
+  const filterSummary = [["All", "All Devices"], ["Online", "Online"], ["Offline", "Offline"]]
+    .map(([value, label]) => `<button class="filter-pill ${state.machineView === "list" && state.machineFilter === value ? "active" : ""}" type="button" data-quick-machine-filter="${value}">${label}</button>`)
+    .join("");
   const selectedFilterCount = [
     state.machineFilter !== "All",
     state.machineClusterFilter !== "All",
@@ -234,7 +238,7 @@ export function renderMachinesPage({ state, machines, machineHistory }) {
         <label><span>Area</span>${customSelect("machine-area", [["All", "All areas"], ...areaOptions], state.machineAreaFilter, { label: "Area", ariaLabel: "Filter by area" })}</label>
         <label><span>Device</span>${customSelect("machine-device", [["All", "All devices"], ...deviceOptions.map(value => [value, value])], state.machineDeviceFilter, { label: "Device", ariaLabel: "Filter by device" })}</label>
         <div class="alarm-time-section"><h3>Time range</h3><div class="alarm-time-options">
-          ${[["1 day", "1 day"], ["7 days", "7 days"], ["30 days", "30 days"], ["All", "All time"]].map(([value, label]) => `<button type="button" class="${state.machineTimeRange === value ? "active" : ""}" data-machine-time-range="${value}">${label}</button>`).join("")}
+          ${[["1 day", "1 Day"], ["7 days", "7 Days"], ["30 days", "30 Days"], ["All", "All Time"]].map(([value, label]) => `<button type="button" class="${state.machineTimeRange === value ? "active" : ""}" data-machine-time-range="${value}">${label}</button>`).join("")}
         </div></div>
       </div>
       <div class="alarm-filter-column alarm-filter-details"><h3>Device details</h3>
@@ -249,24 +253,32 @@ export function renderMachinesPage({ state, machines, machineHistory }) {
       (
         machine,
         index,
-      ) => `<tr class="clickable" data-machine="${escapeHtml(machine.id)}">
-    <td><div class="machine-cell"><span class="machine-num">${String(index + 1).padStart(2, "0")}</span><span><strong>${escapeHtml(deviceDisplayName(machine))}</strong><small>${escapeHtml([machine.id, machine.cluster, machine.zone].filter(Boolean).join(" · "))}</small></span></div></td>
+      ) => {
+        const health = machineHealth(machine);
+        return `<tr class="clickable" data-machine="${escapeHtml(machine.id)}">
+    <td><div class="machine-cell"><span class="machine-num">${String(index + 1).padStart(2, "0")}</span><span><strong>${escapeHtml(deviceDisplayName(machine))}</strong><small>${escapeHtml([machine.cluster, machine.zone].filter(Boolean).join(" · "))}</small></span></div></td>
     <td>${connectionStatusDisplay(machine)}</td><td>${escapeHtml(connectionLastUpdate(machine))}</td>
-    <td><div class="health-score"><div class="health-bar"><span style="width:${machine.health}%"></span></div><small>${Number.isFinite(machine.health) ? `${machine.health}%` : "—"}</small></div></td>
-    <td><div class="machine-actions"><button class="row-action" data-machine="${escapeHtml(machine.id)}">View</button>${state.currentUser?.isOwner ? `<button class="row-action" data-edit-machine="${escapeHtml(machine.id)}" type="button">Edit</button><button class="row-action danger" data-delete-machine="${escapeHtml(machine.id)}" type="button">Delete</button>` : ""}</div></td>
-  </tr>`,
+    <td><div class="health-score"><progress class="health-bar" value="${health ?? 0}" max="100" aria-label="${health === null ? "Device health unavailable" : `Device health ${health}%`}">${health ?? 0}%</progress><small>${health === null ? "—" : `${health}%`}</small></div></td>
+    <td><div class="machine-actions"><button class="row-action" data-machine="${escapeHtml(machine.id)}">View</button>${state.currentUser?.isOwner && !state.devicePreviewMode ? `<button class="row-action" data-edit-machine="${escapeHtml(machine.id)}" type="button">Edit</button><button class="row-action danger" data-delete-machine="${escapeHtml(machine.id)}" type="button">Delete</button>` : ""}</div></td>
+  </tr>`;
+      },
     )
     .join("");
-  const ownerActions = state.currentUser?.isOwner
+  const ownerActions = state.currentUser?.isOwner && !state.devicePreviewMode
     ? `<button class="secondary-btn" id="manage-locations" type="button">Manage clusters & areas</button><button class="secondary-btn" id="removed-machines" type="button">Removed devices</button><button class="primary-btn" id="add-machine" type="button">+ Add device</button>`
     : "";
-  return `${pageHead("Devices", "", `${ownerActions}${downloadMenu([{ id: "export-machines-pdf", label: "PDF", format: "pdf" }, { id: "export-machines-xlsx", label: "Excel", format: "xlsx" }], { label: "Export", buttonClass: "secondary-btn", showLabel: true })}`)}
+  const headerActions = state.devicePreviewMode
+    ? ""
+    : `${ownerActions}${downloadMenu([{ id: "export-machines-pdf", label: "PDF", format: "pdf" }, { id: "export-machines-xlsx", label: "Excel", format: "xlsx" }], { label: "Export", buttonClass: "secondary-btn", showLabel: true })}`;
+  return `${state.dashboardDeviceReturn ? `<button class="back-link" type="button" data-page="dashboard">${icon("arrowLeft")} Back to Dashboard</button>` : ""}
+    ${pageHead("Devices", "", headerActions)}
+    ${state.devicePreviewMode ? `<aside class="device-preview-notice" role="status"><strong>Device preview</strong><span>Sample devices and readings only. No changes are saved.</span></aside>` : ""}
     <div class="machine-view-toolbar">
       <div class="machine-view-switch" role="group" aria-label="Device view">
         <button class="${state.machineView === "cluster" ? "active" : ""}" type="button" data-machine-view="cluster">${icon("layers")} Cluster View</button>
         <button class="${state.machineView === "live" ? "active" : ""}" type="button" data-machine-view="live">${icon("database")} Live Data</button>
       </div>
-      <span class="machine-view-note">${state.machineView === "live" ? "Device → Date → Reading" : "Cluster → Area → Device"}</span>
+      <span class="machine-view-note">${state.machineView === "live" ? "Device → Date → Reading" : state.machineView === "cluster" ? "Cluster → Area → Device" : "Device list"}</span>
     </div>
-    ${state.machineView === "live" ? renderLiveDataPanel({ state, machines, machineHistory }) : `<div class="filter-bar"><div class="search-wrap">${icon("search")}<input id="machine-search" type="search" value="${escapeHtml(state.machineSearch)}" placeholder="${state.machineView === "cluster" ? "Search cluster, area or device…" : "Search devices…"}"></div><div class="device-filter-actions"><div class="filter-pills">${filters}</div><button class="secondary-btn ${selectedFilterCount ? "filter-active" : ""}" id="machine-more-filters" type="button">${icon("filter")} More filters</button></div></div>${state.machineView === "cluster" ? clusterView(state, filtered, machines) : `<section class="panel"><div class="table-wrap"><table class="data-table machine-table"><thead><tr><th>Device</th><th>Status</th><th>Last update</th><th>Health</th><th>Action</th></tr></thead><tbody>${rows || `<tr><td colspan="5"><div class="empty-state">${icon("search")}No devices match this filter.</div></td></tr>`}</tbody></table></div></section>`}`}${machineDialog(state)}${renderLocationManager(state, machines)}${machineFilters}`;
+    ${state.machineView === "live" ? renderLiveDataPanel({ state, machines, machineHistory }) : `<div class="filter-bar"><div class="search-wrap">${icon("search")}<input id="machine-search" type="search" value="${escapeHtml(state.machineSearch)}" placeholder="${state.machineView === "cluster" ? "Search cluster, area or device…" : "Search devices…"}"></div><div class="device-filter-actions"><div class="filter-pills" aria-label="Device connection summary">${filterSummary}</div><button class="secondary-btn ${selectedFilterCount ? "filter-active" : ""}" id="machine-more-filters" type="button">${icon("filter")} More filters</button></div></div>${state.machineView === "cluster" ? clusterView(state, filtered, machines) : `<section class="panel"><div class="table-wrap"><table class="data-table machine-table"><thead><tr><th>Device</th><th>Status</th><th>Last update</th><th>Health</th><th>Action</th></tr></thead><tbody>${rows || `<tr><td colspan="5"><div class="empty-state">${icon("search")}No devices match this filter.</div></td></tr>`}</tbody></table></div></section>`}`}${machineDialog(state)}${state.devicePreviewMode ? "" : renderLocationManager(state, machines)}${machineFilters}`;
 }

@@ -2,7 +2,8 @@ function sampleValue(reading) {
   return {
     flow: reading.metrics.flowLpm,
     pressure: reading.metrics.pressureBar,
-    suction: reading.metrics.suctionKpa
+    suction: reading.metrics.suctionKpa,
+    ...(reading.metrics.powerMonitor ? { powerMonitor: reading.metrics.powerMonitor } : {})
   };
 }
 

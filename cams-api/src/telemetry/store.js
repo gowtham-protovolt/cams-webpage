@@ -4,10 +4,25 @@ import { evaluateMachine } from "../monitoring/health.js";
 import { setGatewayAlarm, syncTelemetryAlarms } from "./alarms.js";
 import { getSiteSettings } from "../settings/service.js";
 
+async function findOrRegisterMachine(db, siteId, machineId, options, receivedAt) {
+  const existing = await db.collection("machines").findOne({ siteId, machineId }, { projection: { active: 1, configuration: 1 } });
+  if (existing || options?.autoRegisterDevices !== true) return existing;
+  await db.collection("machines").updateOne(
+    { siteId, machineId },
+    { $setOnInsert: {
+      siteId, machineId, name: machineId, cluster: "Unassigned", zone: "Unassigned",
+      active: true, status: "offline", gatewayStatus: "offline", createdAt: receivedAt, updatedAt: receivedAt,
+      createdBy: "mqtt-auto-registration"
+    } },
+    { upsert: true }
+  );
+  return db.collection("machines").findOne({ siteId, machineId }, { projection: { active: 1, configuration: 1 } });
+}
+
 export async function ingestTelemetry(telemetry, options) {
   const db = getDatabase();
   const { siteId, machineId } = telemetry.series;
-  const registeredMachine = await db.collection("machines").findOne({ siteId, machineId }, { projection: { active: 1 } });
+  const registeredMachine = await findOrRegisterMachine(db, siteId, machineId, options, telemetry.receivedAt);
   if (!registeredMachine?.active) {
     return { duplicate: false, ignored: true, reason: registeredMachine ? "machine-removed" : "machine-not-registered" };
   }
@@ -15,7 +30,12 @@ export async function ingestTelemetry(telemetry, options) {
   const retentionDays = typeof options === "number" ? options : siteSettings.retentionDays;
   const monitoringConfig = typeof options === "number" ? undefined : {
     staleAfterSeconds: siteSettings.sampling.staleAfterSeconds,
-    thresholds: siteSettings.thresholds
+    thresholds: {
+      ...siteSettings.thresholds,
+      ...(registeredMachine.configuration?.sensors?.powerMonitor
+        ? { powerMonitor: registeredMachine.configuration.sensors.powerMonitor }
+        : {})
+    }
   };
   const receiptId = `${siteId}/${machineId}/${telemetry.sequence}`;
   try {

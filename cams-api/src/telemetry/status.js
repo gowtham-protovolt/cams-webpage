@@ -3,6 +3,7 @@ import { evaluateMachine } from "../monitoring/health.js";
 import { setGatewayAlarm } from "./alarms.js";
 import { telemetryEvents } from "./events.js";
 import { getSiteSettings } from "../settings/service.js";
+import { resolveLocation } from "./locations.js";
 
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 
@@ -16,16 +17,45 @@ export function parseStatusMessage(topic, payload, receivedAt = new Date()) {
   try { body = JSON.parse(payload.toString("utf8")); } catch { throw new Error("Status payload must be valid JSON."); }
   const status = String(body?.status || "").toLowerCase();
   if (!new Set(["online", "offline"]).has(status)) throw new Error("Status must be online or offline.");
-  return { siteId, machineId, status, receivedAt, firmwareVersion: body.firmwareVersion ? String(body.firmwareVersion).slice(0, 80) : null };
+  const cleanLocation = value => {
+    const name = typeof value === "string" ? value.trim().replace(/\s+/g, " ") : "";
+    return name && name.length <= 80 ? name : null;
+  };
+  return {
+    siteId, machineId, status, receivedAt,
+    firmwareVersion: body.firmwareVersion ? String(body.firmwareVersion).slice(0, 80) : null,
+    cluster: cleanLocation(body.cluster),
+    area: cleanLocation(body.area)
+  };
+}
+
+// Cluster / area sent by the device fill in a machine that is still "Unassigned".
+// Assignments made on the web page are never overwritten by a device message.
+async function applyDeviceLocation(db, { siteId, machineId, cluster, area }) {
+  const current = await db.collection("machines").findOne({ siteId, machineId, active: true }, { projection: { clusterId: 1, cluster: 1 } });
+  if (!current || (current.clusterId && current.cluster !== "Unassigned")) return;
+  try {
+    const location = await resolveLocation(siteId, { cluster, zone: area });
+    await db.collection("machines").updateOne({ siteId, machineId, active: true }, { $set: { ...location, updatedAt: new Date() } });
+  } catch (error) {
+    console.warn(`CAMS device location ignored for ${machineId}: ${error.message}`);
+  }
 }
 
 export async function ingestDeviceStatus(deviceStatus, config) {
   const db = getDatabase();
   const { siteId, machineId } = deviceStatus;
-  const registeredMachine = await db.collection("machines").findOne({ siteId, machineId }, { projection: { active: 1 } });
-  if (!registeredMachine?.active) {
-    return { ignored: true, reason: registeredMachine ? "machine-removed" : "machine-not-registered" };
+  const registeredMachine = await db.collection("machines").findOne({ siteId, machineId }, { projection: { active: 1, configuration: 1 } });
+  if (!registeredMachine && config.autoRegisterDevices === true) {
+    await db.collection("machines").updateOne(
+      { siteId, machineId },
+      { $setOnInsert: { siteId, machineId, name: machineId, cluster: "Unassigned", zone: "Unassigned", active: true, status: "offline", gatewayStatus: "offline", createdAt: deviceStatus.receivedAt, updatedAt: deviceStatus.receivedAt, createdBy: "mqtt-auto-registration" } },
+      { upsert: true }
+    );
   }
+  const activeMachine = registeredMachine || await db.collection("machines").findOne({ siteId, machineId }, { projection: { active: 1, configuration: 1 } });
+  if (!activeMachine?.active) return { ignored: true, reason: activeMachine ? "machine-removed" : "machine-not-registered" };
+  if (deviceStatus.cluster && deviceStatus.area) await applyDeviceLocation(db, deviceStatus);
   await Promise.all([
     db.collection("deviceStatus").updateOne({ siteId, machineId }, { $set: deviceStatus }, { upsert: true }),
     db.collection("machines").updateOne(
@@ -43,7 +73,13 @@ export async function ingestDeviceStatus(deviceStatus, config) {
   await setGatewayAlarm(siteId, machineId, deviceStatus.status === "offline", deviceStatus.receivedAt);
   const telemetry = await db.collection("latestTelemetry").findOne({ siteId, machineId });
   const settings = await getSiteSettings(config, siteId);
-  const monitoring = evaluateMachine(telemetry, deviceStatus, { staleAfterSeconds: settings.sampling.staleAfterSeconds, thresholds: settings.thresholds }, deviceStatus.receivedAt);
+  const monitoring = evaluateMachine(telemetry, deviceStatus, {
+    staleAfterSeconds: settings.sampling.staleAfterSeconds,
+    thresholds: {
+      ...settings.thresholds,
+      ...(activeMachine.configuration?.sensors?.powerMonitor ? { powerMonitor: activeMachine.configuration.sensors.powerMonitor } : {})
+    }
+  }, deviceStatus.receivedAt);
   const event = { siteId, machineId, ...monitoring, lastStatusAt: deviceStatus.receivedAt, firmwareVersion: deviceStatus.firmwareVersion };
   telemetryEvents.emit("machine-status", event);
   return event;
@@ -63,7 +99,13 @@ export async function markStaleMachines(config, now = new Date()) {
       getDatabase().collection("latestTelemetry").findOne({ siteId: machine.siteId, machineId: machine.machineId }),
       getDatabase().collection("deviceStatus").findOne({ siteId: machine.siteId, machineId: machine.machineId })
     ]);
-    const monitoring = evaluateMachine(telemetry, deviceStatus, { staleAfterSeconds: settings.sampling.staleAfterSeconds, thresholds: settings.thresholds }, now);
+    const monitoring = evaluateMachine(telemetry, deviceStatus, {
+      staleAfterSeconds: settings.sampling.staleAfterSeconds,
+      thresholds: {
+        ...settings.thresholds,
+        ...(machine.configuration?.sensors?.powerMonitor ? { powerMonitor: machine.configuration.sensors.powerMonitor } : {})
+      }
+    }, now);
     await getDatabase().collection("machines").updateOne(
       { _id: machine._id },
       { $set: { status: monitoring.status, gatewayStatus: monitoring.gatewayStatus, updatedAt: now } }

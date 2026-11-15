@@ -3,7 +3,6 @@
 #include <ModbusMaster.h>
 #include <MQTT.h>
 #include <WiFi.h>
-#include <WiFiClientSecure.h>
 #include <sys/time.h>
 #include <time.h>
 
@@ -12,7 +11,7 @@
 
 HardwareSerial plcSerial(2);
 ModbusMaster plc;
-WiFiClientSecure networkClient;
+WiFiClient networkClient;
 MQTTClient mqttClient(1536);
 
 struct PlcSample {
@@ -23,6 +22,11 @@ struct PlcSample {
   uint16_t err2;
   uint16_t err3;
 };
+
+constexpr int32_t FLOW_SIGNAL_RAW_MIN = 1000;
+constexpr int32_t PRESSURE_SIGNAL_RAW_MIN = 1000;
+constexpr int32_t SUCTION_SIGNAL_RAW_MIN = 3000;
+constexpr uint16_t SENSOR_DISCONNECTED_ERR = 1001;
 
 uint32_t nextSampleAt = 0;
 uint32_t lastWifiAttempt = 0;
@@ -64,16 +68,16 @@ bool readPlcSample(PlcSample &sample) {
   return true;
 }
 
-float pressureBarFromPv(int32_t pv3) {
-  return ((static_cast<float>(pv3) - 1999.0f) * 7.0f) / 5569.0f;
+float pressureBarFromPv(int32_t pv2) {
+  return ((static_cast<float>(pv2) - 1999.0f) * 7.0f) / 5569.0f;
 }
 
 float flowLpmFromPv(int32_t pv1) {
   return (static_cast<float>(pv1) - 2000.09f) / 3.95805f;
 }
 
-float suctionKpaFromPv(int32_t pv2) {
-  return (static_cast<float>(pv2) - 6015.44f) / 41.1673f;
+float suctionKpaFromPv(int32_t pv3) {
+  return (static_cast<float>(pv3) - 6015.44f) / 41.1673f;
 }
 
 const char *calibrationQuality(float value, float verifiedMinimum, float verifiedMaximum, uint16_t errorCode) {
@@ -135,9 +139,15 @@ bool publishSample(const PlcSample &sample) {
   }
 
   const float flowLpm = flowLpmFromPv(sample.pv1);
-  const float suctionKpa = suctionKpaFromPv(sample.pv2);
-  const float pressureBar = pressureBarFromPv(sample.pv3);
-  const bool hasAlarm = sample.err1 != 0 || sample.err2 != 0 || sample.err3 != 0;
+  const float pressureBar = pressureBarFromPv(sample.pv2);
+  const float suctionKpa = suctionKpaFromPv(sample.pv3);
+  const bool flowDisconnected = sample.pv1 < FLOW_SIGNAL_RAW_MIN;
+  const bool pressureDisconnected = sample.pv2 < PRESSURE_SIGNAL_RAW_MIN;
+  const bool suctionDisconnected = sample.pv3 < SUCTION_SIGNAL_RAW_MIN;
+  const uint16_t flowError = flowDisconnected && sample.err1 == 0 ? SENSOR_DISCONNECTED_ERR : sample.err1;
+  const uint16_t pressureError = pressureDisconnected && sample.err2 == 0 ? SENSOR_DISCONNECTED_ERR : sample.err2;
+  const uint16_t suctionError = suctionDisconnected && sample.err3 == 0 ? SENSOR_DISCONNECTED_ERR : sample.err3;
+  const bool hasAlarm = flowError != 0 || pressureError != 0 || suctionError != 0;
 
   JsonDocument document;
   document["timestamp"] = timestamp;
@@ -152,9 +162,9 @@ bool publishSample(const PlcSample &sample) {
   raw["pv3"] = sample.pv3;
 
   JsonObject errors = document["errors"].to<JsonObject>();
-  errors["flow"] = sample.err1;
-  errors["suction"] = sample.err2;
-  errors["pressure"] = sample.err3;
+  errors["flow"] = flowError;
+  errors["pressure"] = pressureError;
+  errors["suction"] = suctionError;
 
   JsonObject metrics = document["metrics"].to<JsonObject>();
   metrics["flowLpm"] = roundf(flowLpm * 1000.0f) / 1000.0f;
@@ -162,9 +172,9 @@ bool publishSample(const PlcSample &sample) {
   metrics["pressureBar"] = roundf(pressureBar * 1000.0f) / 1000.0f;
 
   JsonObject quality = document["quality"].to<JsonObject>();
-  quality["flow"] = calibrationQuality(flowLpm, -22.0f, 50.0f, sample.err1);
-  quality["suction"] = calibrationQuality(suctionKpa, 0.6f, 1.8f, sample.err2);
-  quality["pressure"] = calibrationQuality(pressureBar, 0.0f, 7.0f, sample.err3);
+  quality["flow"] = flowDisconnected ? "bad" : calibrationQuality(flowLpm, -22.0f, 50.0f, flowError);
+  quality["pressure"] = pressureDisconnected ? "bad" : calibrationQuality(pressureBar, 0.0f, 7.0f, pressureError);
+  quality["suction"] = suctionDisconnected ? "bad" : calibrationQuality(suctionKpa, 0.6f, 1.8f, suctionError);
   quality["modbus"] = "good";
 
   char payload[1400];
@@ -199,13 +209,6 @@ void setup() {
   plc.postTransmission(enableRs485Receive);
 
   WiFi.mode(WIFI_STA);
-#ifdef MQTT_CA_CERT
-  networkClient.setCACert(MQTT_CA_CERT);
-#else
-  // Keep the cloud connection encrypted during commissioning. Add the EMQX
-  // deployment CA certificate to secrets.h before production rollout.
-  networkClient.setInsecure();
-#endif
   mqttClient.begin(MQTT_HOST, MQTT_PORT, networkClient);
   mqttClient.setWill(STATUS_TOPIC, "{\"status\":\"offline\"}", true, 1);
   configTime(0, 0, "pool.ntp.org", "time.google.com");

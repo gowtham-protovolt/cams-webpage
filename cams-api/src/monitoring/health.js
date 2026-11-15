@@ -3,7 +3,13 @@ export const DEFAULT_MONITORING = Object.freeze({
   thresholds: Object.freeze({
     pressureBar: Object.freeze({ minimum: 6.8, maximum: 7.5 }),
     flowLpm: Object.freeze({ minimum: 22, maximum: 28 }),
-    suctionKpa: Object.freeze({ minimum: 0.6, maximum: 1.8 })
+    suctionKpa: Object.freeze({ minimum: 0.6, maximum: 1.8 }),
+    powerMonitor: Object.freeze({
+      voltageV: Object.freeze({ minimum: 0, maximum: 1000 }), currentA: Object.freeze({ minimum: 0, maximum: 10000 }),
+      activePowerW: Object.freeze({ minimum: -1e9, maximum: 1e9 }), powerFactor: Object.freeze({ minimum: -1, maximum: 1 }),
+      frequencyHz: Object.freeze({ minimum: 0, maximum: 1000 }), apparentPowerVa: Object.freeze({ minimum: 0, maximum: 1e9 }),
+      reactivePowerVar: Object.freeze({ minimum: -1e9, maximum: 1e9 }), powerTotalKwh: Object.freeze({ minimum: 0, maximum: 1e12 })
+    })
   })
 });
 
@@ -13,6 +19,20 @@ const SENSOR_FIELDS = [
   ["suction", "suctionKpa"]
 ];
 
+const POWER_FIELDS = [
+  ["voltage", "voltageV", "Voltage"],
+  ["current", "currentA", "Current"],
+  ["activePower", "activePowerW", "Active power"],
+  ["powerFactor", "powerFactor", "Power factor"],
+  ["frequency", "frequencyHz", "Frequency"],
+  ["apparentPower", "apparentPowerVa", "Apparent power"],
+  ["reactivePower", "reactivePowerVar", "Reactive power"],
+  ["powerTotal", "powerTotalKwh", "Power total"]
+];
+
+function configuredPowerFields(monitoring) {
+  return POWER_FIELDS.filter(([, field]) => monitoring.thresholds?.powerMonitor?.[field]);
+}
 export function evaluateMachine(telemetry, deviceStatus, monitoring = DEFAULT_MONITORING, now = new Date()) {
   const receivedAt = telemetry?.receivedAt ? new Date(telemetry.receivedAt) : null;
   const ageMs = receivedAt && !Number.isNaN(receivedAt.getTime()) ? Math.max(0, now.getTime() - receivedAt.getTime()) : null;
@@ -59,6 +79,15 @@ export function evaluateMachine(telemetry, deviceStatus, monitoring = DEFAULT_MO
   for (const [label, field] of SENSOR_FIELDS) {
     const value = telemetry?.metrics?.[field];
     const range = monitoring.thresholds[field];
+    if (quality[label] === "bad" || Number(errors[label] || 0) !== 0) continue;
+    if (Number.isFinite(value) && (value < range.minimum || value > range.maximum)) {
+      score -= 10;
+      reasons.push(`${label} is outside its configured range`);
+    }
+  }
+  for (const [, field, label] of configuredPowerFields(monitoring)) {
+    const value = telemetry?.metrics?.powerMonitor?.[field];
+    const range = monitoring.thresholds.powerMonitor[field];
     if (Number.isFinite(value) && (value < range.minimum || value > range.maximum)) {
       score -= 10;
       reasons.push(`${label} is outside its configured range`);
@@ -90,9 +119,17 @@ export function alarmConditions(telemetry, monitoring = DEFAULT_MONITORING) {
   for (const [label, field] of SENSOR_FIELDS) {
     const value = telemetry?.metrics?.[field];
     const range = monitoring.thresholds[field];
+    if (telemetry?.quality?.[label] === "bad" || Number(telemetry?.errors?.[label] || 0) !== 0) continue;
     if (!Number.isFinite(value)) continue;
     if (value < range.minimum) conditions.push({ code: `${field}-low`, parameter: label, severity: "Warning", value, message: `${label} is below ${range.minimum}.` });
     if (value > range.maximum) conditions.push({ code: `${field}-high`, parameter: label, severity: "Warning", value, message: `${label} is above ${range.maximum}.` });
+  }
+  for (const [, field, label] of configuredPowerFields(monitoring)) {
+    const value = telemetry?.metrics?.powerMonitor?.[field];
+    const range = monitoring.thresholds.powerMonitor[field];
+    if (!Number.isFinite(value)) continue;
+    if (value < range.minimum) conditions.push({ code: `power-${field}-low`, parameter: label, severity: "Warning", value, message: `${label} is below ${range.minimum}.` });
+    if (value > range.maximum) conditions.push({ code: `power-${field}-high`, parameter: label, severity: "Warning", value, message: `${label} is above ${range.maximum}.` });
   }
   for (const [label] of SENSOR_FIELDS) {
     const errorCode = Number(telemetry?.errors?.[label] || 0);

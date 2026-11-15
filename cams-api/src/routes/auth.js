@@ -4,7 +4,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { getDatabase } from "../db.js";
 import { hashPassword, normalizeIdentity, validateNewPassword, verifyPassword } from "../auth/password.js";
 import { clearSessionCookie, createSession, hashSessionToken, setSessionCookie } from "../auth/session.js";
-import { requireAuth } from "../middleware/auth.js";
+import { getBearerToken, requireAuth } from "../middleware/auth.js";
 import { ObjectId } from "mongodb";
 
 const MAX_FAILED_ATTEMPTS = 5;
@@ -136,6 +136,16 @@ export function authRouter(config) {
         { $set: { failedLoginCount: 0, lockUntil: null, lastLoginAt: now, updatedAt: now } }
       );
       const session = await createSession({ userId: user._id, remember, request, config });
+
+      if (String(request.body?.sessionType || "").toLowerCase() === "bearer") {
+        return response.json({
+          user: request.app.locals.publicUser(user),
+          token: session.token,
+          expiresAt: session.expiresAt.toISOString(),
+          sessionType: "bearer"
+        });
+      }
+
       setSessionCookie(response, session.token, session.expiresAt, config);
       response.json({ user: request.app.locals.publicUser(user), expiresAt: session.expiresAt.toISOString() });
     } catch (error) {
@@ -178,7 +188,7 @@ export function authRouter(config) {
 
   router.post("/logout", async (request, response, next) => {
     try {
-      const token = request.cookies[config.cookie.name];
+      const token = getBearerToken(request) || request.cookies[config.cookie.name];
       if (token) await getDatabase().collection("sessions").deleteOne({ tokenHash: hashSessionToken(token) });
       clearSessionCookie(response, config);
       response.status(204).end();

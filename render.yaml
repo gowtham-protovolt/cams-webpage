@@ -17,7 +17,7 @@ services:
       - key: MONGODB_DB
         value: cams
       - key: CORS_ORIGINS
-        value: https://gowtham-protovolt.github.io
+        value: https://Gowtham-S10.github.io
       - key: COOKIE_NAME
         value: cams_session
       - key: COOKIE_SECURE
@@ -31,7 +31,7 @@ services:
       - key: PASSWORD_RESET_MINUTES
         value: "30"
       - key: PASSWORD_RESET_BASE_URL
-        value: https://gowtham-protovolt.github.io/cams-webpage/
+        value: https://Gowtham-S10.github.io/cams-webpage/
       - key: TELEMETRY_RETENTION_DAYS
         value: "7"
       - key: TELEMETRY_STALE_SECONDS

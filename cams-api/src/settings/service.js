@@ -1,6 +1,16 @@
 import { getDatabase } from "../db.js";
 
 const DAY_SECONDS = 24 * 60 * 60;
+const DEFAULT_POWER_THRESHOLDS = Object.freeze({
+  voltageV: { minimum: 0, maximum: 1000 },
+  currentA: { minimum: 0, maximum: 10000 },
+  activePowerW: { minimum: -1e9, maximum: 1e9 },
+  powerFactor: { minimum: -1, maximum: 1 },
+  frequencyHz: { minimum: 0, maximum: 1000 },
+  apparentPowerVa: { minimum: 0, maximum: 1e9 },
+  reactivePowerVar: { minimum: -1e9, maximum: 1e9 },
+  powerTotalKwh: { minimum: 0, maximum: 1e12 }
+});
 
 function defaults(config, siteId) {
   return {
@@ -20,7 +30,11 @@ function mergeSettings(base, stored = {}) {
     thresholds: {
       pressureBar: { ...base.thresholds.pressureBar, ...stored.thresholds?.pressureBar },
       flowLpm: { ...base.thresholds.flowLpm, ...stored.thresholds?.flowLpm },
-      suctionKpa: { ...base.thresholds.suctionKpa, ...stored.thresholds?.suctionKpa }
+      suctionKpa: { ...base.thresholds.suctionKpa, ...stored.thresholds?.suctionKpa },
+      powerMonitor: Object.fromEntries(Object.entries(base.thresholds.powerMonitor || {}).map(([key, value]) => [
+        key,
+        { ...value, ...stored.thresholds?.powerMonitor?.[key] }
+      ]))
     },
     sampling: { ...base.sampling, ...stored.sampling },
     notifications: { ...base.notifications, ...stored.notifications },
@@ -70,7 +84,17 @@ export function validateSettings(input) {
     thresholds: {
       pressureBar: range(input.thresholds?.pressureBar, "Pressure", -5, 100),
       flowLpm: range(input.thresholds?.flowLpm, "Flow", -10000, 10000),
-      suctionKpa: range(input.thresholds?.suctionKpa, "Suction", -1000, 1000)
+      suctionKpa: range(input.thresholds?.suctionKpa, "Suction", -1000, 1000),
+      powerMonitor: {
+        voltageV: range(input.thresholds?.powerMonitor?.voltageV || DEFAULT_POWER_THRESHOLDS.voltageV, "Power voltage", 0, 1000),
+        currentA: range(input.thresholds?.powerMonitor?.currentA || DEFAULT_POWER_THRESHOLDS.currentA, "Power current", 0, 10000),
+        activePowerW: range(input.thresholds?.powerMonitor?.activePowerW || DEFAULT_POWER_THRESHOLDS.activePowerW, "Active power", -1e9, 1e9),
+        powerFactor: range(input.thresholds?.powerMonitor?.powerFactor || DEFAULT_POWER_THRESHOLDS.powerFactor, "Power factor", -1, 1),
+        frequencyHz: range(input.thresholds?.powerMonitor?.frequencyHz || DEFAULT_POWER_THRESHOLDS.frequencyHz, "Power frequency", 0, 1000),
+        apparentPowerVa: range(input.thresholds?.powerMonitor?.apparentPowerVa || DEFAULT_POWER_THRESHOLDS.apparentPowerVa, "Apparent power", 0, 1e9),
+        reactivePowerVar: range(input.thresholds?.powerMonitor?.reactivePowerVar || DEFAULT_POWER_THRESHOLDS.reactivePowerVar, "Reactive power", -1e9, 1e9),
+        powerTotalKwh: range(input.thresholds?.powerMonitor?.powerTotalKwh || DEFAULT_POWER_THRESHOLDS.powerTotalKwh, "Total power", 0, 1e12)
+      }
     },
     sampling: { intervalSeconds, staleAfterSeconds },
     retentionDays: integer(input.retentionDays, "Retention", 1, 3650),

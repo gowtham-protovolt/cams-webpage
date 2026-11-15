@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { alarmConditions, evaluateMachine } from "../src/monitoring/health.js";
 import { parseStatusMessage } from "../src/telemetry/status.js";
+import { alarmNeedsTicketReconciliation } from "../src/telemetry/alarms.js";
 
 const now = new Date("2026-10-07T12:00:00.000Z");
 const monitoring = {
@@ -40,12 +41,66 @@ test("calculates healthy, alarm, and stale machine states", () => {
   assert.equal(stale.health, 0);
 });
 
+test("does not score invalid sensor values as additional range violations", () => {
+  const disconnected = evaluateMachine(telemetry({
+    metrics: { pressureBar: 0, flowLpm: 25, suctionKpa: 1.2 },
+    errors: { pressure: 1001, flow: 0, suction: 0 },
+    quality: { pressure: "bad", flow: "good", suction: "good", modbus: "good" }
+  }), { status: "online" }, monitoring, now);
+  assert.equal(disconnected.health, 45);
+});
+
 test("creates threshold and PLC alarm conditions", () => {
   const conditions = alarmConditions(telemetry({
     metrics: { pressureBar: 8, flowLpm: 25, suctionKpa: 1.2 },
-    errors: { pressure: 3, flow: 0, suction: 0 }
+    errors: { pressure: 0, flow: 3, suction: 0 }
   }), monitoring);
-  assert.deepEqual(conditions.map(item => item.code).sort(), ["pressure-plc-error", "pressureBar-high"]);
+  assert.deepEqual(conditions.map(item => item.code).sort(), ["flow-plc-error", "pressureBar-high"]);
+});
+
+test("does not add a threshold warning for a sensor with bad quality or a PLC error", () => {
+  const conditions = alarmConditions(telemetry({
+    metrics: { pressureBar: 2, flowLpm: 25, suctionKpa: 1.2 },
+    errors: { pressure: 1001, flow: 0, suction: 0 },
+    quality: { pressure: "bad", flow: "good", suction: "good", modbus: "good" }
+  }), monitoring);
+  assert.deepEqual(conditions.map(item => item.code), ["pressure-plc-error", "pressure-bad-quality"]);
+});
+
+test("power threshold alarms stay disabled until a power range is configured", () => {
+  const reading = telemetry({
+    metrics: {
+      pressureBar: 7.1,
+      flowLpm: 25,
+      suctionKpa: 1.2,
+      powerMonitor: { voltageV: 250, currentA: 12 }
+    }
+  });
+  assert.deepEqual(alarmConditions(reading, monitoring).map(item => item.code), []);
+  const configured = {
+    ...monitoring,
+    thresholds: {
+      ...monitoring.thresholds,
+      powerMonitor: {
+        voltageV: { minimum: 220, maximum: 240 },
+        currentA: { minimum: 0, maximum: 10 }
+      }
+    }
+  };
+  assert.deepEqual(
+    alarmConditions(reading, configured).map(item => item.code).sort(),
+    ["power-currentA-high", "power-voltageV-high"]
+  );
+});
+
+test("reconciles tickets only when an alarm is created or its problem changes", () => {
+  const condition = { severity: "Critical", message: "Pressure is above range." };
+  assert.equal(alarmNeedsTicketReconciliation(null, condition), true);
+  assert.equal(alarmNeedsTicketReconciliation({ status: "Active", ...condition }, condition), false);
+  assert.equal(alarmNeedsTicketReconciliation({ status: "Acknowledged", ...condition }, condition), false);
+  assert.equal(alarmNeedsTicketReconciliation({ status: "Resolved", ...condition }, condition), true);
+  assert.equal(alarmNeedsTicketReconciliation({ status: "Active", ...condition, severity: "Warning" }, condition), true);
+  assert.equal(alarmNeedsTicketReconciliation({ status: "Active", ...condition, message: "Different problem." }, condition), true);
 });
 
 test("parses retained MQTT online and offline status messages", () => {

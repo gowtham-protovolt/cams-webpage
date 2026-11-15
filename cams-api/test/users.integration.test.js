@@ -6,7 +6,7 @@ import { hashPassword } from "../src/auth/password.js";
 import { closeDatabase, connectDatabase } from "../src/db.js";
 import { loadConfig } from "../src/config.js";
 
-const hasDatabase = Boolean(process.env.MONGODB_URI);
+const hasDatabase = Boolean(process.env.MONGODB_URI || (process.env.MONGODB_APP_USERNAME && process.env.MONGODB_APP_PASSWORD));
 
 async function login(baseUrl, origin, identity, password) {
   const response = await fetch(`${baseUrl}/api/auth/login`, {
@@ -105,6 +105,34 @@ test("allows only owners to list, create, and disable CAMS users", { skip: !hasD
       body: JSON.stringify({ active: false })
     });
     assert.equal(selfDisable.status, 400);
+
+    const activePermanentDelete = await fetch(`${baseUrl}/api/admin/users/${createdUser.id}/permanent`, {
+      method: "DELETE", headers: { Origin: origin, Cookie: ownerLogin.cookie }
+    });
+    assert.equal(activePermanentDelete.status, 404);
+    const softDeleted = await fetch(`${baseUrl}/api/admin/users/${createdUser.id}`, {
+      method: "DELETE", headers: { Origin: origin, Cookie: ownerLogin.cookie }
+    });
+    assert.equal(softDeleted.status, 200);
+    const testSessionToken = `permanent-delete-session-${process.pid}`;
+    const testResetToken = `permanent-delete-reset-${process.pid}`;
+    const retainedTicketGeneration = `permanent-delete-user-${process.pid}`;
+    const retainedAlarmId = `permanent-delete-user-alarm-${process.pid}`;
+    await Promise.all([
+      db.collection("sessions").insertOne({ userId: storedUser._id, tokenHash: testSessionToken, expiresAt: new Date(Date.now() + 60_000) }),
+      db.collection("passwordResetTokens").insertOne({ userId: storedUser._id, tokenHash: testResetToken, expiresAt: new Date(Date.now() + 60_000) }),
+      db.collection("tickets").insertOne({ siteId: "user-delete-test", id: retainedTicketGeneration, generationKey: retainedTicketGeneration, actorUserId: createdUser.id }),
+      db.collection("alarmAudit").insertOne({ alarmId: retainedAlarmId, actorUserId: createdUser.id, action: "User history retained", createdAt: now })
+    ]);
+    const permanentDelete = await fetch(`${baseUrl}/api/admin/users/${createdUser.id}/permanent`, {
+      method: "DELETE", headers: { Origin: origin, Cookie: ownerLogin.cookie }
+    });
+    assert.equal(permanentDelete.status, 200);
+    assert.equal((await db.collection("users").findOne({ _id: storedUser._id })), null);
+    assert.equal(await db.collection("sessions").countDocuments({ tokenHash: testSessionToken }), 0);
+    assert.equal(await db.collection("passwordResetTokens").countDocuments({ tokenHash: testResetToken }), 0);
+    assert.equal(await db.collection("tickets").countDocuments({ generationKey: retainedTicketGeneration }), 1);
+    assert.equal(await db.collection("alarmAudit").countDocuments({ alarmId: retainedAlarmId }), 1);
   } finally {
     await new Promise(resolve => server.close(resolve));
     await closeDatabase();

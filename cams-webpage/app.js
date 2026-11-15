@@ -17,6 +17,8 @@ import { bindLocations } from "./src/pages/locations.js";
   renderTicketDetailPage,
   renderUsersPage
 } from "./src/pages/index.js";
+import { createDevicePreview, createDevicePreviewConfiguration } from "./src/data/device-preview.js";
+import { trendTimeBounds } from "./src/pages/trends.js";
 import {
   addComment,
   applyTicketEvent,
@@ -39,6 +41,25 @@ const API_BASE_URL = (configuredApiBaseUrl === "same-origin" ? window.location.o
 const customSelectMenuState = new WeakMap();
 const customSelectMenuOwners = new WeakMap();
 
+function positionCustomSelectMenu(wrapper) {
+  const trigger = wrapper.querySelector("[data-custom-select-trigger]");
+  const menu = customSelectMenuState.get(wrapper)?.menu;
+  if (!trigger || !menu || menu.hidden) return;
+  const bounds = trigger.getBoundingClientRect();
+  const viewportGap = 12;
+  const menuGap = 5;
+  const spaceBelow = window.innerHeight - bounds.bottom - viewportGap;
+  const spaceAbove = bounds.top - viewportGap;
+  const preferredHeight = Math.min(menu.scrollHeight || 80, 320, window.innerHeight * .48);
+  const openAbove = spaceBelow < preferredHeight && spaceAbove > spaceBelow;
+  const availableHeight = Math.max(80, openAbove ? spaceAbove - menuGap : spaceBelow);
+  const renderedHeight = Math.min(preferredHeight, availableHeight);
+  menu.style.top = `${openAbove ? Math.max(viewportGap, bounds.top - renderedHeight - menuGap) : bounds.bottom + menuGap}px`;
+  menu.style.left = `${bounds.left}px`;
+  menu.style.width = `${bounds.width}px`;
+  menu.style.maxHeight = `${availableHeight}px`;
+}
+
 function setCustomSelectOpen(wrapper, open) {
   const trigger = wrapper.querySelector("[data-custom-select-trigger]");
   let state = customSelectMenuState.get(wrapper);
@@ -53,7 +74,6 @@ function setCustomSelectOpen(wrapper, open) {
   menu.hidden = !open;
   wrapper.classList.toggle("is-open", open);
   if (open) {
-    const bounds = trigger.getBoundingClientRect();
     if (!state.placeholder) {
       state.placeholder = document.createComment("time-range-menu");
       menu.before(state.placeholder);
@@ -63,10 +83,7 @@ function setCustomSelectOpen(wrapper, open) {
     menu.classList.toggle("custom-calendar-select-menu", Boolean(wrapper.closest(".custom-calendar-month-select")));
     menu.classList.toggle("user-edit-select-menu", wrapper.classList.contains("user-edit-select"));
     document.body.append(menu);
-    menu.style.top = `${bounds.bottom + 5}px`;
-    menu.style.left = `${bounds.left}px`;
-    menu.style.width = `${bounds.width}px`;
-    menu.style.maxHeight = `${Math.max(80, window.innerHeight - bounds.bottom - 16)}px`;
+    positionCustomSelectMenu(wrapper);
   } else {
     if (state.placeholder?.isConnected) state.placeholder.replaceWith(menu);
     state.placeholder = null;
@@ -85,10 +102,35 @@ function closeCustomSelects(except) {
   });
 }
 
+function cleanupCustomSelectMenus() {
+  closeCustomSelects();
+  document.querySelectorAll("body > .custom-select-menu").forEach(menu => {
+    const owner = customSelectMenuOwners.get(menu);
+    if (owner?.isConnected) setCustomSelectOpen(owner, false);
+    else menu.remove();
+  });
+}
+
+function selectCustomOption(option) {
+  const wrapper = customSelectMenuOwners.get(option.closest(".custom-select-menu"));
+  const select = wrapper?.querySelector(".custom-select-native");
+  const state = wrapper ? customSelectMenuState.get(wrapper) : null;
+  if (!wrapper || !select || !state) return false;
+  select.value = option.dataset.customSelectOption;
+  wrapper.querySelector(".custom-select-trigger span").textContent = option.textContent;
+  state.menu.querySelectorAll("[data-custom-select-option]").forEach(item => {
+    item.setAttribute("aria-selected", String(item === option));
+  });
+  select.dispatchEvent(new Event("change", { bubbles: true }));
+  setCustomSelectOpen(wrapper, false);
+  document.getElementById(`${select.id}-trigger`)?.focus({ preventScroll: true });
+  return true;
+}
+
 document.addEventListener("click", event => {
   const activeDownloadMenu = event.target.closest?.(".download-menu");
   document.querySelectorAll(".download-menu[open]").forEach(menu => {
-    if (menu !== activeDownloadMenu || event.target.closest?.(".download-menu-option")) menu.removeAttribute("open");
+    if (menu !== activeDownloadMenu && !menu.classList.contains("is-exporting")) menu.removeAttribute("open");
   });
 
   const trigger = event.target.closest?.("[data-custom-select-trigger]");
@@ -102,17 +144,8 @@ document.addEventListener("click", event => {
 
   const option = event.target.closest?.("[data-custom-select-option]");
   if (option) {
-    const wrapper = customSelectMenuOwners.get(option.closest(".custom-select-menu"));
-    const select = wrapper?.querySelector(".custom-select-native");
-    if (!select) return;
-    setCustomSelectOpen(wrapper, false);
-    select.value = option.dataset.customSelectOption;
-    wrapper.querySelector(".custom-select-trigger span").textContent = option.textContent;
-    customSelectMenuState.get(wrapper).menu.querySelectorAll("[data-custom-select-option]").forEach(item => {
-      item.setAttribute("aria-selected", String(item === option));
-    });
-    select.dispatchEvent(new Event("change", { bubbles: true }));
-    document.getElementById(`${select.id}-trigger`)?.focus();
+    event.preventDefault();
+    selectCustomOption(option);
     return;
   }
 
@@ -125,9 +158,12 @@ document.addEventListener("keydown", event => {
 });
 
 document.addEventListener("scroll", event => {
-  if (!event.target.closest?.(".custom-select-menu")) closeCustomSelects();
+  if (event.target.closest?.(".custom-select-menu")) return;
+  document.querySelectorAll("[data-custom-select].is-open").forEach(positionCustomSelectMenu);
 }, true);
-window.addEventListener("resize", () => closeCustomSelects());
+window.addEventListener("resize", () => {
+  document.querySelectorAll("[data-custom-select].is-open").forEach(positionCustomSelectMenu);
+});
 
 document.addEventListener("keydown", event => {
   const option = event.target.closest?.("[data-custom-select-option]");
@@ -143,6 +179,9 @@ document.addEventListener("keydown", event => {
     if (nextIndex >= 0) {
       event.preventDefault();
       options[nextIndex].focus();
+    } else if (["Enter", " "].includes(event.key)) {
+      event.preventDefault();
+      selectCustomOption(option);
     } else if (event.key === "Escape") {
       event.preventDefault();
       setCustomSelectOpen(wrapper, false);
@@ -279,6 +318,9 @@ const authApi = {
   async listUsers() {
     return this.request("/api/admin/users");
   },
+  async dashboardSummary(siteId) {
+    return this.request(`/api/dashboard/summary?siteId=${encodeURIComponent(siteId)}`);
+  },
   async createUser(user) {
     return this.request("/api/admin/users", { method: "POST", body: JSON.stringify(user) });
   },
@@ -297,6 +339,9 @@ const authApi = {
   async restoreUser(userId) {
     return this.request(`/api/admin/users/${encodeURIComponent(userId)}/restore`, { method: "POST", body: "{}" });
   },
+  async permanentlyDeleteUser(userId) {
+    return this.request(`/api/admin/users/${encodeURIComponent(userId)}/permanent`, { method: "DELETE" });
+  },
   async createMachine(machine) {
     return this.request("/api/machines", { method: "POST", body: JSON.stringify(machine) });
   },
@@ -304,6 +349,15 @@ const authApi = {
     return this.request(`/api/machines/${encodeURIComponent(machineId)}?siteId=${encodeURIComponent(siteId)}`, {
       method: "PATCH",
       body: JSON.stringify(machine)
+    });
+  },
+  async getMachineConfiguration(machineId, siteId) {
+    return this.request(`/api/machines/${encodeURIComponent(machineId)}/configuration?siteId=${encodeURIComponent(siteId)}`);
+  },
+  async saveMachineConfiguration(machineId, siteId, configuration) {
+    return this.request(`/api/machines/${encodeURIComponent(machineId)}/configuration?siteId=${encodeURIComponent(siteId)}`, {
+      method: "PUT",
+      body: JSON.stringify(configuration)
     });
   },
   async removeMachine(machineId, siteId) {
@@ -318,20 +372,30 @@ const authApi = {
       body: "{}"
     });
   },
+  async permanentlyDeleteMachine(machineId, siteId) {
+    return this.request(`/api/machines/${encodeURIComponent(machineId)}/permanent?siteId=${encodeURIComponent(siteId)}`, { method: "DELETE" });
+  },
   async download(path) {
-    let response;
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 60_000);
     try {
-      response = await fetch(`${API_BASE_URL}${path}`, { credentials: "include" });
-    } catch {
+      const response = await fetch(`${API_BASE_URL}${path}`, { credentials: "include", signal: controller.signal });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        const exportError = new Error(payload.error || "Export could not be created.");
+        exportError.name = "ExportError";
+        throw exportError;
+      }
+      const disposition = response.headers.get("content-disposition") || "";
+      const filename = disposition.match(/filename="([^"]+)"/i)?.[1] || "cams-export";
+      return { blob: await response.blob(), filename };
+    } catch (error) {
+      if (error?.name === "AbortError") throw new Error("Export took too long. Reduce the time range and try again.");
+      if (error?.name === "ExportError") throw error;
       throw new Error("CAMS export service is unavailable. Try again shortly.");
+    } finally {
+      window.clearTimeout(timeout);
     }
-    if (!response.ok) {
-      const payload = await response.json().catch(() => ({}));
-      throw new Error(payload.error || "Export could not be created.");
-    }
-    const disposition = response.headers.get("content-disposition") || "";
-    const filename = disposition.match(/filename="([^"]+)"/i)?.[1] || "cams-export";
-    return { blob: await response.blob(), filename };
   }
 };
 
@@ -381,6 +445,8 @@ let telemetryStream = null;
 let telemetryRenderTimer = null;
 let liveSyncTimer = null;
 let liveSyncInFlight = false;
+let liveRenderDeferred = false;
+const liveTelemetryPages = new Set(["dashboard", "machines", "machine-detail", "trends", "alarms"]);
 let profileOutsideClickBound = false;
 let calendarOutsideClickBound = false;
 
@@ -399,6 +465,7 @@ try {
   console.warn("Could not read the CAMS screen mode preference.", error);
 }
 const resetTokenFromUrl = new URLSearchParams(window.location.search).get("resetToken") || "";
+const devicePreviewMode = new URLSearchParams(window.location.search).get("devicePreview") === "1";
 const machineLimitStorageKey = "cams.machineOperatingLimits";
 let savedMachineLimitOverrides = {};
 try {
@@ -419,7 +486,6 @@ const state = {
   currentUser: null,
   page: "dashboard",
   ticketId: "",
-  ticketType: "problem",
   ticketRecords: [],
   ticketOperators: [],
   ticketsError: "",
@@ -433,8 +499,11 @@ const state = {
   ticketFromDate: "",
   ticketToDate: "",
   ticketMoreFiltersOpen: false,
+  devicePreviewMode,
   machineId: savedMachineId || "CAMS-01",
   machineFilter: "All",
+  dashboardDeviceReturn: false,
+  dashboardAlarmReturn: false,
   machineClusterFilter: "All",
   machineAreaFilter: "All",
   machineDeviceFilter: "All",
@@ -452,17 +521,23 @@ const state = {
   trendMachine: "CAMS-01",
   trendParameter: ["Pressure", "Flow", "Suction"].includes(savedTrendParameter) ? savedTrendParameter : "Pressure",
   trendRange: "1h",
-  dashboardParameter: ["Pressure", "Flow", "Suction"].includes(savedDashboardParameter) ? savedDashboardParameter : "Pressure",
+  dashboardParameter: ["Pressure", "Flow", "Suction", "Temperature"].includes(savedDashboardParameter) ? savedDashboardParameter : "Pressure",
   dashboardRange: ["15m", "1h", "6h", "24h", "7d", "1mo", "3mo", "6mo", "1y"].includes(savedDashboardRange) ? savedDashboardRange : "1h",
+  dashboardRefreshing: false,
+  powerMonitorOpen: false,
+  machinePowerMonitorOpen: false,
+  powerMonitorMetric: "voltageV",
+  powerMonitorRange: "1h",
   dashboardCustomDate: "",
   customDatePicker: null,
   customDatePickerMonth: "",
   customDatePickerSelecting: null,
-  detailParameter: ["Pressure", "Flow", "Suction"].includes(savedDetailParameter) ? savedDetailParameter : "Pressure",
+  detailParameter: ["Pressure", "Flow", "Suction", "Temperature"].includes(savedDetailParameter) ? savedDetailParameter : "Pressure",
   detailRange: "1h",
   detailCustomDate: "",
   trendCustomDate: "",
   screenMode: savedScreenMode,
+  liveSidebarOpen: false,
   mobileOpen: false,
   notificationsOpen: false,
   userMenuOpen: false,
@@ -491,14 +566,18 @@ const state = {
   settingsError: "",
   machineLimitOverrides: savedMachineLimitOverrides,
   machineLimitsEditing: false,
+  machineLimitsSaving: false,
+  machineConfigurationOpen: false,
+  machineConfigurationLoading: false,
+  machineConfigurationSaving: false,
+  machineConfigurationError: "",
+  machineConfigurationTab: "general",
+  machineConfiguration: null,
+  devicePreviewConfigurations: {},
   machineModal: null,
   removedMachines: [],
   removedMachinesLoading: false,
-  machineManagementError: "",
-  alarmModal: null,
-  alarmHistory: [],
-  alarmHistoryLoading: false,
-  alarmAuditError: ""
+  machineManagementError: ""
 };
 
 const navItems = [
@@ -528,10 +607,11 @@ function fmt(value, unit = "") {
   return value === null || value === undefined ? "—" : `${Number(value).toFixed(value % 1 ? 1 : 0)}${unit ? ` ${unit}` : ""}`;
 }
 
-function showToast(message) {
+function showToast(message, tone = "success") {
   const toast = document.createElement("div");
-  toast.className = "toast";
-  toast.innerHTML = `${icon("check")}<span>${message}</span>`;
+  toast.className = `toast ${tone === "error" ? "error" : "success"}`;
+  toast.setAttribute("role", tone === "error" ? "alert" : "status");
+  toast.innerHTML = `${icon(tone === "error" ? "alarm" : "check")}<span>${message}</span>`;
   toastRegion.append(toast);
   window.setTimeout(() => toast.remove(), 3200);
 }
@@ -552,6 +632,7 @@ function displayStatus(value = "offline") {
 function mapMachine(item) {
   const telemetry = item.telemetry || null;
   const metrics = telemetry?.metrics || null;
+  const quality = telemetry?.quality || null;
   const monitoring = telemetry?.monitoring || item.monitoring || {};
   const status = displayStatus(monitoring.status || telemetry?.status || item.status);
   const receivedAt = telemetry?.receivedAt || item.lastSeenAt || null;
@@ -564,13 +645,14 @@ function mapMachine(item) {
     clusterId: item.clusterId,
     areaId: item.areaId,
     status,
-    pressure: metrics?.pressureBar ?? null,
-    flow: metrics?.flowLpm ?? null,
-    suction: metrics?.suctionKpa ?? null,
-    temperature: metrics?.temperatureC ?? null,
+    pressure: quality?.pressure === "bad" ? null : metrics?.pressureBar ?? null,
+    flow: quality?.flow === "bad" ? null : metrics?.flowLpm ?? null,
+    suction: quality?.suction === "bad" ? null : metrics?.suctionKpa ?? null,
+    temperature: quality?.temperature === "bad" ? null : metrics?.temperatureC ?? null,
+    powerMonitor: metrics?.powerMonitor || null,
     raw: telemetry?.raw || null,
     errors: telemetry?.errors || null,
-    quality: telemetry?.quality || null,
+    quality,
     calibrationVersion: telemetry?.calibrationVersion || null,
     source: telemetry?.source || null,
     monitoring,
@@ -666,10 +748,34 @@ function appendHistory(payload) {
   machineHistory.set(reading.machineId, deduplicated.slice(-2000));
 }
 
-async function loadMachines({ render = true } = {}) {
-  const payload = await authApi.request("/api/machines");
-  const locations = await authApi.request(`/api/locations?siteId=${encodeURIComponent(state.settings?.siteId || "plant-01")}`);
-  state.locations = locations.clusters;
+async function loadMachines({ render = true, loadLocations = true } = {}) {
+  if (devicePreviewMode) {
+    const preview = createDevicePreview();
+    machines = preview.machines.map(item => {
+      const machine = mapMachine(item);
+      const configuration = state.devicePreviewConfigurations[machine.id];
+      if (configuration) machine.name = configuration.general.deviceName;
+      return machine;
+    });
+    state.locations = preview.clusters;
+    machineHistory.clear();
+    for (const reading of preview.readings) appendHistory(reading);
+    state.lastTelemetryAt = preview.readings[0]?.receivedAt || null;
+    if (!machines.some(machine => machine.id === state.machineId)) state.machineId = machines[0]?.id || "";
+    if (!machines.some(machine => machine.id === state.trendMachine)) state.trendMachine = machines[0]?.id || "";
+    if (render && !state.locationManager && !state.machineModal) renderApp();
+    return machines;
+  }
+  const [payload, locations] = await Promise.all([
+    authApi.request("/api/machines"),
+    loadLocations ? authApi.request(`/api/locations?siteId=${encodeURIComponent(state.settings?.siteId || "plant-01")}`) : Promise.resolve(null)
+  ]);
+  if (locations) state.locations = locations.clusters;
+  applyMachinePayload(payload);
+  if (render && !state.locationManager && !state.machineModal) renderApp();
+}
+
+function applyMachinePayload(payload) {
   machines = (payload.machines || []).map(mapMachine);
   for (const item of payload.machines || []) {
     if (item.telemetry) appendHistory(item.telemetry);
@@ -681,7 +787,205 @@ async function loadMachines({ render = true } = {}) {
   if (newest) state.lastTelemetryAt = newest;
   if (!machines.some(machine => machine.id === state.machineId) && machines[0]) state.machineId = machines[0].id;
   if (!machines.some(machine => machine.id === state.trendMachine) && machines[0]) state.trendMachine = machines[0].id;
-  if (render && !state.locationManager && !state.machineModal) renderApp();
+}
+
+async function openMachineConfiguration() {
+  const machine = machines.find(item => item.id === state.machineId);
+  if (!machine) return;
+  state.machineConfigurationOpen = true;
+  state.machineConfigurationLoading = true;
+  state.machineConfigurationSaving = false;
+  state.machineConfigurationError = "";
+  state.machineConfigurationTab = "general";
+  state.machineConfiguration = null;
+  renderApp();
+  try {
+    state.machineConfiguration = await loadDeviceConfiguration(machine);
+  } catch (error) {
+    state.machineConfigurationError = error.message;
+  } finally {
+    state.machineConfigurationLoading = false;
+    if (state.machineConfigurationOpen && state.page === "machine-detail") renderApp();
+  }
+}
+
+async function loadDeviceConfiguration(machine) {
+  let configuration;
+  let saved;
+  if (devicePreviewMode) {
+    configuration = state.devicePreviewConfigurations[machine.id] || createDevicePreviewConfiguration(machine);
+    saved = Boolean(state.devicePreviewConfigurations[machine.id]);
+  } else {
+    const payload = await authApi.getMachineConfiguration(machine.id, machine.siteId);
+    configuration = payload.configuration;
+    saved = payload.saved;
+  }
+  const legacy = saved ? null : state.machineLimitOverrides?.[machine.id];
+  if (legacy) {
+    configuration = {
+      ...configuration,
+      sensors: {
+        ...configuration.sensors,
+        flow: legacy.flowLpm || configuration.sensors.flow,
+        pressure: legacy.pressureBar || configuration.sensors.pressure,
+        suction: legacy.suctionKpa || configuration.sensors.suction,
+        temperature: legacy.temperatureC || configuration.sensors.temperature
+      }
+    };
+  }
+  return configuration;
+}
+
+async function loadMachineConfigurationForDetail() {
+  const machine = machines.find(item => item.id === state.machineId);
+  if (!machine) return;
+  const configuration = await loadDeviceConfiguration(machine);
+  if (state.page !== "machine-detail" || state.machineId !== machine.id || state.machineConfigurationOpen) return;
+  state.machineConfiguration = configuration;
+  renderApp();
+}
+
+function closeMachineConfiguration() {
+  if (state.machineConfigurationSaving) return;
+  state.machineConfigurationOpen = false;
+  state.machineConfigurationError = "";
+  renderApp();
+}
+
+function configurationFromForm(form) {
+  const fields = new FormData(form);
+  const value = name => String(fields.get(name) ?? "").trim();
+  const number = name => Number(fields.get(name));
+  const range = name => ({ minimum: number(`sensors.${name}.minimum`), maximum: number(`sensors.${name}.maximum`) });
+  const powerMetricKeys = ["voltageV", "currentA", "activePowerW", "reactivePowerVar", "apparentPowerVa", "powerFactor", "frequencyHz", "powerTotalKwh"];
+  const configuration = {
+    general: { deviceName: value("general.deviceName"), machineId: value("general.machineId"), location: value("general.location") },
+    sensors: { flow: range("flow"), pressure: range("pressure"), suction: range("suction"), temperature: range("temperature") },
+    plc: { protocol: value("plc.protocol"), baudRate: number("plc.baudRate"), serialFormat: value("plc.serialFormat"), slaveId: number("plc.slaveId") },
+    data: { samplingInterval: number("data.samplingInterval"), mqttTopic: value("data.mqttTopic") },
+    alarms: {
+      thresholdAlerts: fields.has("alarms.thresholdAlerts"),
+      highPressure: number("alarms.highPressure"),
+      lowPressure: number("alarms.lowPressure"),
+      offlineDelaySeconds: number("alarms.offlineDelaySeconds")
+    }
+  };
+  const powerMonitor = {};
+  for (const key of powerMetricKeys) {
+    const minimum = value(`sensors.powerMonitor.${key}.minimum`);
+    const maximum = value(`sensors.powerMonitor.${key}.maximum`);
+    if (!minimum && !maximum) continue;
+    if (!minimum || !maximum) throw new Error(`${key} requires both a minimum and maximum.`);
+    powerMonitor[key] = { minimum: Number(minimum), maximum: Number(maximum) };
+  }
+  if (Object.keys(powerMonitor).length) configuration.sensors.powerMonitor = powerMonitor;
+  for (const [label, sensorRange] of Object.entries(configuration.sensors).filter(([key]) => key !== "powerMonitor")) {
+    if (!Number.isFinite(sensorRange.minimum) || !Number.isFinite(sensorRange.maximum) || sensorRange.minimum >= sensorRange.maximum) {
+      throw new Error(`${label} minimum must be lower than its maximum.`);
+    }
+  }
+  for (const [label, sensorRange] of Object.entries(powerMonitor)) {
+    if (!Number.isFinite(sensorRange.minimum) || !Number.isFinite(sensorRange.maximum) || sensorRange.minimum >= sensorRange.maximum) {
+      throw new Error(`${label} minimum must be lower than its maximum.`);
+    }
+  }
+  if (configuration.alarms.lowPressure >= configuration.alarms.highPressure) {
+    throw new Error("Low pressure threshold must be lower than the high threshold.");
+  }
+  if (!configuration.general.deviceName) throw new Error("Device name is required.");
+  return configuration;
+}
+
+async function saveMachineConfiguration(event) {
+  event.preventDefault();
+  if (!state.currentUser?.isOwner || state.machineConfigurationSaving) return;
+  const machine = machines.find(item => item.id === state.machineId);
+  if (!machine) return;
+  let configuration;
+  try {
+    configuration = configurationFromForm(event.currentTarget);
+  } catch (error) {
+    state.machineConfigurationError = error.message;
+    renderApp();
+    return;
+  }
+  state.machineConfiguration = configuration;
+  state.machineConfigurationSaving = true;
+  state.machineConfigurationError = "";
+  renderApp();
+  try {
+    if (devicePreviewMode) {
+      state.devicePreviewConfigurations[machine.id] = configuration;
+      const previewMachine = machines.find(item => item.id === machine.id);
+      if (previewMachine) previewMachine.name = configuration.general.deviceName;
+    } else {
+      const result = await authApi.saveMachineConfiguration(machine.id, machine.siteId, configuration);
+      state.machineConfiguration = result.configuration;
+      await loadMachines({ render: false });
+    }
+    state.machineConfigurationSaving = false;
+    renderApp();
+    showToast("Device configuration saved.");
+  } catch (error) {
+    state.machineConfigurationError = error.message;
+    state.machineConfigurationSaving = false;
+    renderApp();
+  }
+}
+
+async function saveMachineLimits(event) {
+  event.preventDefault();
+  if (!state.currentUser?.isOwner || !state.machineLimitsEditing || state.machineLimitsSaving) return;
+  const machine = machines.find(item => item.id === state.machineId);
+  if (!machine) return;
+  const data = new FormData(event.currentTarget);
+  const number = name => Number(data.get(name));
+  const sensors = {
+    pressure: { minimum: number("limits.pressureBar.minimum"), maximum: number("limits.pressureBar.maximum") },
+    flow: { minimum: number("limits.flowLpm.minimum"), maximum: number("limits.flowLpm.maximum") },
+    suction: { minimum: number("limits.suctionKpa.minimum"), maximum: number("limits.suctionKpa.maximum") },
+    temperature: { minimum: number("limits.temperatureC.minimum"), maximum: number("limits.temperatureC.maximum") }
+  };
+  const powerMetricKeys = ["voltageV", "currentA", "activePowerW", "reactivePowerVar", "apparentPowerVa", "powerFactor", "frequencyHz", "powerTotalKwh"];
+  const powerMonitor = {};
+  for (const key of powerMetricKeys) {
+    const minimumRaw = String(data.get(`limits.powerMonitor.${key}.minimum`) ?? "").trim();
+    const maximumRaw = String(data.get(`limits.powerMonitor.${key}.maximum`) ?? "").trim();
+    if (!minimumRaw && !maximumRaw) continue;
+    if (!minimumRaw || !maximumRaw) throw new Error(`${key} requires both a minimum and maximum.`);
+    powerMonitor[key] = { minimum: Number(minimumRaw), maximum: Number(maximumRaw) };
+  }
+  if (Object.keys(powerMonitor).length) sensors.powerMonitor = powerMonitor;
+  if (Object.entries(sensors).filter(([key]) => key !== "powerMonitor").some(([, range]) => range.minimum >= range.maximum)
+    || Object.values(powerMonitor).some(range => !Number.isFinite(range.minimum) || !Number.isFinite(range.maximum) || range.minimum >= range.maximum)) {
+    showToast("Each minimum must be lower than its maximum.");
+    return;
+  }
+  try {
+    const current = state.machineConfiguration?.general?.machineId === machine.id
+      ? state.machineConfiguration
+      : await loadDeviceConfiguration(machine);
+    const configuration = { ...current, sensors };
+    state.machineConfiguration = configuration;
+    state.machineLimitsSaving = true;
+    renderApp();
+    if (devicePreviewMode) {
+      state.devicePreviewConfigurations[machine.id] = configuration;
+      const previewMachine = machines.find(item => item.id === machine.id);
+      if (previewMachine) previewMachine.name = configuration.general.deviceName;
+    } else {
+      const result = await authApi.saveMachineConfiguration(machine.id, machine.siteId, configuration);
+      state.machineConfiguration = result.configuration;
+      await loadMachines({ render: false });
+    }
+    state.machineLimitsSaving = false;
+    state.machineLimitsEditing = false;
+    renderApp();
+    showToast("Device operating limits saved.");
+  } catch (error) {
+    state.machineLimitsSaving = false;
+    showToast(error.message);
+  }
 }
 
 function openMachineModal(type, machine = null) {
@@ -772,33 +1076,36 @@ async function restoreRemovedMachine(machineId, siteId, button) {
   }
 }
 
-function historyRangeMilliseconds(range) {
-  return ({
-    "15m": 15 * 60e3,
-    "1h": 60 * 60e3,
-    "6h": 6 * 60 * 60e3,
-    "24h": 24 * 60 * 60e3,
-    "7d": 7 * 24 * 60 * 60e3,
-    "1mo": 30 * 24 * 60 * 60e3,
-    "3mo": 90 * 24 * 60 * 60e3,
-    "6mo": 180 * 24 * 60 * 60e3,
-    "1y": 365 * 24 * 60 * 60e3
-  })[range] || 60 * 60e3;
-}
-
-function rangeStart(range, customDate = "") {
-  if (range === "custom" && customDate) {
-    const date = new Date(`${customDate}T00:00:00`);
-    if (!Number.isNaN(date.getTime())) return date;
+async function permanentlyDeleteRemovedMachine(machineId, siteId, button) {
+  if (!window.confirm(`Permanently delete ${machineId}? This cannot be undone. Telemetry, tickets, and audit history will be retained.`)) return;
+  button.disabled = true;
+  state.machineManagementError = "";
+  try {
+    await authApi.permanentlyDeleteMachine(machineId, siteId);
+    machineHistory.delete(machineId);
+    await loadRemovedMachines({ render: false });
+    renderApp();
+    showToast(`${machineId} permanently deleted. Historical records were retained.`);
+  } catch (error) {
+    state.machineManagementError = error.message;
+    renderApp();
   }
-  return new Date(Date.now() - historyRangeMilliseconds(range));
 }
 
 async function loadMachineHistory(machineId, range = "1h", { render = true, customDate = "" } = {}) {
   const machine = machines.find(item => item.id === machineId);
   if (!machine) return;
-  const from = rangeStart(range, customDate).toISOString();
-  const params = new URLSearchParams({ siteId: machine.siteId, from, limit: "2000" });
+  if (devicePreviewMode) {
+    if (render && state.authenticated) renderApp();
+    return;
+  }
+  const bounds = trendTimeBounds(range, customDate);
+  const params = new URLSearchParams({
+    siteId: machine.siteId,
+    from: new Date(bounds.from).toISOString(),
+    to: new Date(bounds.to).toISOString(),
+    limit: "2000"
+  });
   const payload = await authApi.request(`/api/machines/${encodeURIComponent(machineId)}/telemetry?${params}`);
   machineHistory.set(machineId, []);
   for (const reading of payload.readings || []) appendHistory(reading);
@@ -856,12 +1163,41 @@ function applyAlarm(payload) {
 }
 
 function scheduleTelemetryRender() {
-  if (telemetryRenderTimer || !state.authenticated) return;
+  if (telemetryRenderTimer || !state.authenticated || document.hidden || !liveTelemetryPages.has(state.page)) return;
   telemetryRenderTimer = window.setTimeout(() => {
     telemetryRenderTimer = null;
-    if (!state.locationManager && !state.machineModal && !document.activeElement?.matches("input, select, textarea")) renderApp();
-  }, 250);
+    if (!state.authenticated || document.hidden || !liveTelemetryPages.has(state.page)) {
+      liveRenderDeferred = false;
+      return;
+    }
+    renderLiveUpdate();
+  }, 500);
 }
+
+function liveRenderBlocked() {
+  return Boolean(
+    state.locationManager ||
+    state.machineModal ||
+    document.activeElement?.matches("input, select, textarea") ||
+    document.querySelector(".download-menu[open], .download-menu.is-exporting, [data-custom-select].is-open") ||
+    document.querySelector(".kpi-card.has-action:hover, button:hover, a:hover, [role='button']:hover, svg:hover, .custom-select-trigger:hover")
+  );
+}
+
+function renderLiveUpdate() {
+  if (liveRenderBlocked()) {
+    liveRenderDeferred = true;
+    return;
+  }
+  liveRenderDeferred = false;
+  window.requestAnimationFrame(renderApp);
+}
+
+document.addEventListener("pointerout", event => {
+  if (!liveRenderDeferred || event.relatedTarget?.closest?.(".kpi-card.has-action, button, a, [role='button'], svg, .custom-select-trigger")) return;
+  liveRenderDeferred = false;
+  scheduleTelemetryRender();
+});
 
 function closeTelemetryStream() {
   telemetryStream?.close();
@@ -891,14 +1227,13 @@ function machineSnapshotKey() {
 }
 
 async function syncLiveSnapshot() {
-  if (!state.authenticated || liveSyncInFlight || document.hidden) return;
+  if (!state.authenticated || state.telemetryConnected || liveSyncInFlight || document.hidden) return;
   liveSyncInFlight = true;
   try {
     const previousSnapshot = machineSnapshotKey();
-    await loadMachines({ render: false });
+    await loadMachines({ render: false, loadLocations: false });
     const telemetryChanged = previousSnapshot !== machineSnapshotKey();
-    const livePages = new Set(["dashboard", "machines", "machine-detail", "trends", "alarms"]);
-    if (telemetryChanged && livePages.has(state.page) && !state.locationManager && !state.machineModal && !document.activeElement?.matches("input, select, textarea")) renderApp();
+    if (telemetryChanged && liveTelemetryPages.has(state.page)) renderLiveUpdate();
   } catch {
     // The event stream can continue updating the UI while a recovery poll fails.
   } finally {
@@ -908,7 +1243,7 @@ async function syncLiveSnapshot() {
 
 function startLiveSync() {
   stopLiveSync();
-  const interval = Math.max(1, Number(state.settings?.sampling?.intervalSeconds || 1)) * 1000;
+  const interval = Math.max(5, Number(state.settings?.sampling?.intervalSeconds || 1)) * 1000;
   liveSyncTimer = window.setInterval(syncLiveSnapshot, interval);
 }
 
@@ -949,14 +1284,14 @@ function connectTelemetryStream() {
     try {
       applyTicketEvent(JSON.parse(event.data));
       state.ticketRecords = listTickets();
-      if (["dashboard", "tickets", "ticket-detail"].includes(state.page) && !document.activeElement?.matches("input, select, textarea")) {
+      if (["dashboard", "tickets", "ticket-detail"].includes(state.page) && !liveRenderBlocked()) {
         renderApp();
       }
     } catch {
       // Ignore malformed ticket events and keep the stream open.
     }
   });
-  for (const eventName of ["machine-created", "machine-updated", "machine-removed", "machine-restored"]) {
+  for (const eventName of ["machine-created", "machine-updated", "machine-removed", "machine-restored", "machine-permanently-deleted"]) {
     telemetryStream.addEventListener(eventName, () => {
       loadMachines().catch(() => {});
       if (state.machineModal?.type === "removed") loadRemovedMachines({ render: false }).catch(() => {});
@@ -971,6 +1306,15 @@ function connectTelemetryStream() {
 async function enterApplication(user) {
   state.authenticated = true;
   state.currentUser = user;
+  if (devicePreviewMode) {
+    state.page = "machines";
+    state.machineView = "cluster";
+    await loadMachines({ render: false });
+    state.machineId = machines[0]?.id || "";
+    if (state.machineId) window.sessionStorage.setItem("cams.machineId", state.machineId);
+    renderApp();
+    return;
+  }
   // Connect first so telemetry published while the initial snapshot loads is not missed.
   connectTelemetryStream();
   await loadSettings({ render: false });
@@ -1010,22 +1354,42 @@ function telemetryExportPath(machineId, range, format) {
   const customDate = range === "custom"
     ? state.trendCustomDate
     : "";
-  const from = rangeStart(range, customDate).toISOString();
-  const params = new URLSearchParams({ machineId, siteId: machine?.siteId || "plant-01", from });
+  const bounds = trendTimeBounds(range, customDate);
+  const params = new URLSearchParams({
+    machineId,
+    siteId: machine?.siteId || "plant-01",
+    from: new Date(bounds.from).toISOString(),
+    to: new Date(bounds.to).toISOString()
+  });
   return `/api/exports/telemetry/${format}?${params}`;
 }
 
 function bindDownload(buttonId, path) {
   document.querySelector(buttonId)?.addEventListener("click", async event => {
     const button = event.currentTarget;
+    const menu = button.closest(".download-menu");
+    const summary = menu?.querySelector(":scope > summary");
+    const options = menu ? [...menu.querySelectorAll(".download-menu-option")] : [button];
+    const originalContent = button.innerHTML;
+    const format = /pdf/i.test(button.id) ? "PDF" : "Excel";
+    menu?.classList.add("is-exporting");
+    menu?.setAttribute("open", "");
+    menu?.setAttribute("aria-busy", "true");
+    summary?.setAttribute("aria-disabled", "true");
+    options.forEach(option => { option.disabled = true; });
+    button.innerHTML = `<span class="loading-spinner dark" aria-hidden="true"></span><span>Preparing ${format}…</span>`;
     button.disabled = true;
     try {
       await downloadExport(path());
     } catch (error) {
-      showToast(error.message);
+      showToast(error.message, "error");
     } finally {
-      button.disabled = false;
-      button.closest("details")?.removeAttribute("open");
+      button.innerHTML = originalContent;
+      options.forEach(option => { option.disabled = false; });
+      menu?.classList.remove("is-exporting");
+      menu?.removeAttribute("aria-busy");
+      menu?.removeAttribute("open");
+      summary?.removeAttribute("aria-disabled");
     }
   });
 }
@@ -1043,7 +1407,7 @@ function renderLogin() {
     document.querySelectorAll("[data-password-toggle]").forEach(button => button.addEventListener("click", () => {
       const input = document.querySelector(`#${button.dataset.passwordToggle}`);
       input.type = input.type === "password" ? "text" : "password";
-      button.innerHTML = icon(input.type === "password" ? "eye" : "eyeOff");
+      button.innerHTML = icon(input.type === "password" ? "eyeOff" : "eye");
       button.setAttribute("aria-label", input.type === "password" ? "Show password" : "Hide password");
     }));
     document.querySelector("#reset-password-form")?.addEventListener("submit", handlePasswordReset);
@@ -1054,7 +1418,7 @@ function renderLogin() {
   document.querySelector("#password-toggle").addEventListener("click", (event) => {
     const input = document.querySelector("#password");
     input.type = input.type === "password" ? "text" : "password";
-    event.currentTarget.innerHTML = icon(input.type === "password" ? "eye" : "eyeOff");
+    event.currentTarget.innerHTML = icon(input.type === "password" ? "eyeOff" : "eye");
     event.currentTarget.setAttribute("aria-label", input.type === "password" ? "Show password" : "Hide password");
   });
   document.querySelector("#forgot-password").addEventListener("click", () => {
@@ -1186,6 +1550,7 @@ async function handleLogin(event) {
 }
 
 function renderApp() {
+  cleanupCustomSelectMenus();
   const user = state.currentUser || { displayName: "Plant Owner", role: "Owner / Admin" };
   const safeName = escapeHtml(user.displayName);
   const safeRole = escapeHtml(user.role);
@@ -1197,9 +1562,9 @@ function renderApp() {
   const networkLabel = freshGateways ? `${freshGateways} gateway${freshGateways === 1 ? "" : "s"} sending live data` : state.lastTelemetryAt ? `Last telemetry · ${telemetryUpdateTime(state.lastTelemetryAt)}` : "No telemetry";
   const openAlarmCount = alarms.filter(alarm => alarm.status !== "Resolved").length;
   const sidebarNav = groups.map(group => `<div class="nav-group-label">${group}</div><nav class="nav-list">${navItems.filter(item => item.group === group && (!item.ownerOnly || user.isOwner)).map(item => `<button class="nav-item ${state.page === item.id || (state.page === "ticket-detail" && item.id === "tickets") || (state.page === "machine-detail" && item.id === "machines") ? "active" : ""}" data-page="${item.id}">${icon(item.icon)}<span>${item.label}</span>${item.future ? '<span class="future">P2</span>' : ""}</button>`).join("")}</nav>`).join("");
-  app.innerHTML = `<div class="app-shell ${state.screenMode === "live" ? "live-screen" : "preview-screen"}">
+  app.innerHTML = `<div class="app-shell ${state.screenMode === "live" ? `live-screen ${state.liveSidebarOpen ? "sidebar-open" : ""}` : "preview-screen"}">
     ${state.mobileOpen ? '<button class="mobile-overlay" id="mobile-overlay" aria-label="Close menu"></button>' : ""}
-    <button class="sidebar-reveal-zone" type="button" aria-label="Reveal navigation" title="Reveal navigation"></button>
+    <button class="icon-btn live-sidebar-toggle" id="live-sidebar-toggle" type="button" aria-label="${state.liveSidebarOpen ? "Hide navigation" : "Show navigation"}" aria-expanded="${state.liveSidebarOpen}" title="${state.liveSidebarOpen ? "Hide navigation" : "Show navigation"}">${icon(state.liveSidebarOpen ? "arrowLeft" : "menu")}</button>
     <aside class="sidebar ${state.mobileOpen ? "open" : ""}">
       ${brand(true)}
       ${sidebarNav}
@@ -1317,27 +1682,64 @@ function bindGlobalEvents() {
     });
     calendarOutsideClickBound = true;
   }
-  document.querySelectorAll("[data-page]").forEach(button => button.addEventListener("click", () => navigate(button.dataset.page)));
+  document.querySelectorAll("[data-page]").forEach(button => button.addEventListener("click", () => {
+    navigate(button.dataset.page);
+  }));
   document.querySelectorAll("[data-ticket-row]").forEach(row => {
-    const openTicket = event => {
-      if (event.target.closest(".ticket-row-id")) return;
+    const openTicket = () => {
       state.ticketId = row.dataset.ticketOpen;
       navigate("ticket-detail");
     };
     row.addEventListener("click", openTicket);
     row.addEventListener("keydown", event => {
-      if (event.target !== row || !["Enter", " "].includes(event.key)) return;
+      if (!["Enter", " "].includes(event.key)) return;
       event.preventDefault();
-      openTicket(event);
+      openTicket();
     });
   });
   document.querySelectorAll("[data-machine]").forEach(button => button.addEventListener("click", event => {
     event.stopPropagation();
     state.machineId = button.dataset.machine;
+    state.machinePowerMonitorOpen = false;
     window.sessionStorage.setItem("cams.machineId", state.machineId);
     navigate("machine-detail");
     loadMachineHistory(state.machineId, state.detailRange).catch(error => showToast(error.message));
   }));
+  document.querySelectorAll("[data-power-monitor]").forEach(button => button.addEventListener("click", () => {
+    state.machineId = button.dataset.powerMonitor;
+    window.sessionStorage.setItem("cams.machineId", state.machineId);
+    if (state.page === "machine-detail") state.machinePowerMonitorOpen = true;
+    else state.powerMonitorOpen = true;
+    state.powerMonitorMetric = "voltageV";
+    renderApp();
+    loadMachineHistory(state.machineId, state.powerMonitorRange).catch(error => showToast(error.message));
+  }));
+  document.querySelectorAll("[data-detail-parameter]").forEach(button => button.addEventListener("click", () => {
+    state.detailParameter = button.dataset.detailParameter;
+    window.sessionStorage.setItem("cams.detailParameter", state.detailParameter);
+    renderApp();
+    window.requestAnimationFrame(() => document.querySelector("#machine-operating-trend")?.scrollIntoView({ behavior: "smooth", block: "start" }));
+  }));
+  document.querySelector("#power-monitor-back")?.addEventListener("click", () => {
+    if (state.page === "machine-detail") state.machinePowerMonitorOpen = false;
+    else state.powerMonitorOpen = false;
+    renderApp();
+  });
+  document.querySelectorAll("[data-power-metric]").forEach(button => button.addEventListener("click", () => {
+    state.powerMonitorMetric = button.dataset.powerMetric;
+    renderApp();
+  }));
+  document.querySelector("#power-monitor-range")?.addEventListener("change", event => {
+    state.powerMonitorRange = event.target.value;
+    renderApp();
+    if (state.machineId) loadMachineHistory(state.machineId, state.powerMonitorRange).catch(error => showToast(error.message));
+  });
+  document.querySelector("#machine-settings")?.addEventListener("click", openMachineConfiguration);
+  document.querySelector("#live-sidebar-toggle")?.addEventListener("click", () => {
+    state.liveSidebarOpen = !state.liveSidebarOpen;
+    renderApp();
+    document.querySelector("#live-sidebar-toggle")?.focus({ preventScroll: true });
+  });
   document.querySelector("#mobile-menu")?.addEventListener("click", () => { state.mobileOpen = true; renderApp(); });
   document.querySelector("#mobile-overlay")?.addEventListener("click", () => { state.mobileOpen = false; renderApp(); });
   document.querySelectorAll("[data-screen-mode]").forEach(button => button.addEventListener("click", () => {
@@ -1475,31 +1877,22 @@ function bindConnectedProcessChart() {
 function bindPageEvents() {
   bindLocations({ state, api: authApi, devices: machines, render: renderApp, refresh: loadMachines, toast: showToast });
   bindMaintenance(state, machines, authApi, renderApp, showToast);
-  document.querySelectorAll("[data-dashboard-kpi]").forEach(card => {
+  document.querySelectorAll("[data-dashboard-kpi]").forEach(action => {
     const selectKpi = () => {
-      const filter = card.dataset.dashboardKpi;
+      const filter = action.dataset.dashboardKpi;
       if (filter === "alarms") {
         state.alarmFilter = "Open";
-        navigate("alarms");
+        navigate("alarms", { fromDashboardCard: true });
         return;
       }
       state.machineFilter = filter === "running" ? "Online" : filter === "stopped" ? "Offline" : "All";
       state.machineView = "list";
       window.sessionStorage.setItem("cams.machineView", state.machineView);
       state.machineSearch = "";
-      navigate("machines");
+      navigate("machines", { fromDashboardCard: true });
     };
-    card.addEventListener("click", selectKpi);
-    card.addEventListener("keydown", event => {
-      if (event.key !== "Enter" && event.key !== " ") return;
-      event.preventDefault();
-      selectKpi();
-    });
+    action.addEventListener("click", selectKpi);
   });
-  document.querySelectorAll("[data-ticket-type]").forEach(button => button.addEventListener("click", () => {
-    state.ticketType = button.dataset.ticketType;
-    renderApp();
-  }));
   document.querySelectorAll("[data-ticket-priority-filter]").forEach(button => button.addEventListener("click", () => {
     state.ticketPriorityFilter = button.dataset.ticketPriorityFilter;
     renderApp();
@@ -1598,29 +1991,7 @@ function bindPageEvents() {
     try {
       await updateTicket(state.ticketId, { [field.name]: value });
       state.ticketRecords = listTickets();
-      if (field.name === "maintenance" && value === "Closed") showToast("Ticket closed successfully.");
-    } catch (error) {
-      showToast(error.message);
-    }
-  });
-  ticketForm?.addEventListener("submit", event => {
-    event.preventDefault();
-    const patch = {};
-    ticketForm.querySelectorAll("[data-ticket-field]").forEach(field => {
-      if (field.readOnly) return;
-      patch[field.name] = field.name === "dueBy" && field.value ? new Date(field.value).toISOString() : field.value;
-    });
-    updateTicket(state.ticketId, patch).then(() => {
-      state.ticketRecords = listTickets();
-      showToast("Ticket updated successfully.");
-      renderApp();
-    }).catch(error => showToast(error.message));
-  });
-  document.querySelector("#ticket-maintenance")?.addEventListener("change", async event => {
-    try {
-      await updateTicket(state.ticketId, { maintenance: event.target.value });
-      state.ticketRecords = listTickets();
-      if (event.target.value === "Closed") showToast("Ticket closed successfully.");
+      if (field.name === "maintenance") showToast(`Maintenance marked ${value.toLowerCase()}.`);
       renderApp();
     } catch (error) {
       showToast(error.message);
@@ -1715,14 +2086,21 @@ function bindPageEvents() {
     if (id === "trend-custom-date") loadMachineHistory(state.trendMachine, "custom", { customDate: date }).catch(error => showToast(error.message));
   }));
   document.querySelector("#refresh-dashboard")?.addEventListener("click", async () => {
+    if (state.dashboardRefreshing) return;
+    state.dashboardRefreshing = true;
+    renderApp();
     try {
-      await loadMachines({ render: false });
-      const snapshot = machines.find(machine => machine.id === state.machineId) || machines[0];
-      if (snapshot) await loadMachineHistory(snapshot.id, state.dashboardRange, { render: false });
-      renderApp();
+      const summary = await authApi.dashboardSummary(state.settings?.siteId || "plant-01");
+      applyMachinePayload(summary);
+      alarms = (summary.alarms || []).map(mapAlarm);
+      state.ticketRecords = summary.tickets || [];
+      state.ticketsError = "";
       showToast("Live readings refreshed from the CAMS API.");
     } catch (error) {
       showToast(error.message);
+    } finally {
+      state.dashboardRefreshing = false;
+      renderApp();
     }
   });
   document.querySelector("#machine-search")?.addEventListener("input", event => {
@@ -1733,12 +2111,15 @@ function bindPageEvents() {
     search.focus();
     search.setSelectionRange(position, position);
   });
-  document.querySelectorAll("[data-filter]").forEach(button => button.addEventListener("click", () => {
-    state.machineFilter = button.dataset.filter;
-    if (button.dataset.machineViewTarget) {
-      state.machineView = button.dataset.machineViewTarget;
-      window.sessionStorage.setItem("cams.machineView", state.machineView);
-    }
+  document.querySelectorAll("[data-quick-machine-filter]").forEach(button => button.addEventListener("click", () => {
+    state.machineFilter = button.dataset.quickMachineFilter;
+    state.machineView = "list";
+    window.sessionStorage.setItem("cams.machineView", state.machineView);
+    state.machineClusterFilter = "All";
+    state.machineAreaFilter = "All";
+    state.machineDeviceFilter = "All";
+    state.machineTimeRange = "All";
+    state.machineSearch = "";
     renderApp();
   }));
   document.querySelectorAll("[data-machine-view]").forEach(button => button.addEventListener("click", () => {
@@ -1819,6 +2200,12 @@ function bindPageEvents() {
     window.sessionStorage.setItem("cams.dashboardParameter", state.dashboardParameter);
     renderApp();
   });
+  document.querySelectorAll("[data-dashboard-parameter]").forEach(button => button.addEventListener("click", () => {
+    state.dashboardParameter = button.dataset.dashboardParameter;
+    window.sessionStorage.setItem("cams.dashboardParameter", state.dashboardParameter);
+    renderApp();
+    window.requestAnimationFrame(() => document.querySelector("#dashboard-operating-trend")?.scrollIntoView({ behavior: "smooth", block: "start" }));
+  }));
   document.querySelector("#dashboard-range")?.addEventListener("change", event => {
     state.customDatePicker = null;
     state.customDatePickerSelecting = null;
@@ -1852,8 +2239,15 @@ function bindPageEvents() {
   document.querySelectorAll("[data-restore-machine]").forEach(button => button.addEventListener("click", () => {
     restoreRemovedMachine(button.dataset.restoreMachine, button.dataset.siteId, button);
   }));
+  document.querySelectorAll("[data-permanent-delete-machine]").forEach(button => button.addEventListener("click", () => {
+    permanentlyDeleteRemovedMachine(button.dataset.permanentDeleteMachine, button.dataset.siteId, button);
+  }));
   document.querySelectorAll("[data-alarm-filter]").forEach(button => button.addEventListener("click", () => {
     state.alarmFilter = button.dataset.alarmFilter;
+    loadAlarms().catch(error => showToast(error.message));
+  }));
+  document.querySelectorAll("[data-alarm-summary-filter]").forEach(card => card.addEventListener("click", () => {
+    state.alarmFilter = card.dataset.alarmSummaryFilter;
     loadAlarms().catch(error => showToast(error.message));
   }));
   document.querySelector("#alarm-more-filters")?.addEventListener("click", () => { state.alarmMoreFiltersOpen = true; renderApp(); });
@@ -1940,15 +2334,6 @@ function bindPageEvents() {
       showToast(error.message);
     }
   });
-  document.querySelectorAll("[data-ack]").forEach(button => button.addEventListener("click", () => openAlarmAction(button.dataset.ack, "Acknowledged")));
-  document.querySelectorAll("[data-resolve]").forEach(button => button.addEventListener("click", () => openAlarmAction(button.dataset.resolve, "Resolved")));
-  document.querySelectorAll("[data-view-alarm]").forEach(button => button.addEventListener("click", () => openAlarmHistory(button.dataset.viewAlarm)));
-  document.querySelector("#alarm-modal-close")?.addEventListener("click", closeAlarmModal);
-  document.querySelector("#alarm-modal-cancel")?.addEventListener("click", closeAlarmModal);
-  document.querySelector("#alarm-modal-backdrop")?.addEventListener("click", event => {
-    if (event.target === event.currentTarget) closeAlarmModal();
-  });
-  document.querySelector("#alarm-audit-form")?.addEventListener("submit", submitAlarmAction);
   document.querySelector("#trend-machine")?.addEventListener("change", event => {
     state.trendMachine = event.target.value;
     renderApp();
@@ -1979,22 +2364,24 @@ function bindPageEvents() {
     renderApp();
   });
   document.querySelector("#settings-form")?.addEventListener("submit", saveSettings);
-  document.querySelector("#machine-limits-form")?.addEventListener("submit", event => {
-    event.preventDefault();
-    if (!state.currentUser?.isOwner || !state.machineLimitsEditing) return;
-    const data = new FormData(event.currentTarget);
-    const number = name => Number(data.get(name));
-    state.machineLimitOverrides[state.machineId] = {
-      pressureBar: { minimum: number("limits.pressureBar.minimum"), maximum: number("limits.pressureBar.maximum") },
-      flowLpm: { minimum: number("limits.flowLpm.minimum"), maximum: number("limits.flowLpm.maximum") },
-      suctionKpa: { minimum: number("limits.suctionKpa.minimum"), maximum: number("limits.suctionKpa.maximum") },
-      temperatureC: { minimum: number("limits.temperatureC.minimum"), maximum: number("limits.temperatureC.maximum") }
-    };
-    window.localStorage.setItem(machineLimitStorageKey, JSON.stringify(state.machineLimitOverrides));
-    state.machineLimitsEditing = false;
-    renderApp();
-    showToast("Device operating limits saved locally.");
+  document.querySelectorAll("[data-device-config-close]").forEach(button => button.addEventListener("click", closeMachineConfiguration));
+  document.querySelector("#device-configuration-backdrop")?.addEventListener("click", event => {
+    if (event.target === event.currentTarget) closeMachineConfiguration();
   });
+  document.querySelectorAll("[data-device-config-tab]").forEach(button => button.addEventListener("click", () => {
+    state.machineConfigurationTab = button.dataset.deviceConfigTab;
+    document.querySelectorAll("[data-device-config-tab]").forEach(tab => {
+      const active = tab === button;
+      tab.classList.toggle("active", active);
+      tab.setAttribute("aria-selected", String(active));
+    });
+    document.querySelectorAll("[data-device-config-panel]").forEach(panel => {
+      panel.hidden = panel.dataset.deviceConfigPanel !== state.machineConfigurationTab;
+    });
+  }));
+  document.querySelector("#device-config-retry")?.addEventListener("click", openMachineConfiguration);
+  document.querySelector("#device-configuration-form")?.addEventListener("submit", saveMachineConfiguration);
+  document.querySelector("#machine-limits-form")?.addEventListener("submit", saveMachineLimits);
   document.querySelector("#edit-machine-limits")?.addEventListener("click", () => {
     if (!state.currentUser?.isOwner) return;
     state.machineLimitsEditing = true;
@@ -2002,7 +2389,13 @@ function bindPageEvents() {
   });
   document.querySelector("#refresh-users")?.addEventListener("click", () => loadManagedUsers());
   document.querySelectorAll("[data-user-account-filter]").forEach(button => button.addEventListener("click", () => {
-    state.userAccountFilter = button.dataset.userAccountFilter === "active" ? "active" : "registered";
+    const filter = button.dataset.userAccountFilter;
+    if (filter === "removed") {
+      state.usersRemovedOpen = true;
+      renderApp();
+      return;
+    }
+    state.userAccountFilter = ["active", "disabled"].includes(filter) ? filter : "registered";
     renderApp();
   }));
   document.querySelector("#refresh-live-data")?.addEventListener("click", () => {
@@ -2047,7 +2440,7 @@ function bindPageEvents() {
   document.querySelectorAll("#edit-user-form [data-password-toggle]").forEach(button => button.addEventListener("click", () => {
     const input = document.querySelector(`#${button.dataset.passwordToggle}`);
     input.type = input.type === "password" ? "text" : "password";
-    button.innerHTML = icon(input.type === "password" ? "eye" : "eyeOff");
+    button.innerHTML = icon(input.type === "password" ? "eyeOff" : "eye");
     button.setAttribute("aria-label", input.type === "password" ? "Show password" : "Hide password");
   }));
   document.querySelector("#edit-user-role")?.addEventListener("change", event => {
@@ -2127,6 +2520,19 @@ function bindPageEvents() {
       renderApp();
     }
   }));
+  document.querySelectorAll("[data-permanent-delete-user]").forEach(button => button.addEventListener("click", async () => {
+    if (!window.confirm("Permanently delete this removed account? This cannot be undone. Tickets and audit history will be retained.")) return;
+    button.disabled = true;
+    try {
+      await authApi.permanentlyDeleteUser(button.dataset.permanentDeleteUser);
+      await loadManagedUsers({ render: false });
+      renderApp();
+      showToast("User permanently deleted. Tickets and audit history were retained.");
+    } catch (error) {
+      state.usersError = error.message;
+      renderApp();
+    }
+  }));
   document.querySelector("#removed-users")?.addEventListener("click", () => { state.usersRemovedOpen = true; renderApp(); });
   document.querySelector("#removed-users-close")?.addEventListener("click", () => { state.usersRemovedOpen = false; renderApp(); });
   document.querySelector("#removed-users-cancel")?.addEventListener("click", () => { state.usersRemovedOpen = false; renderApp(); });
@@ -2144,16 +2550,21 @@ function settingsPayload(form) {
   const data = new FormData(form);
   const number = (name, fallback) => data.has(name) ? Number(data.get(name)) : fallback;
   const thresholds = state.settings?.thresholds || {};
+  const sampling = state.settings?.sampling || {};
   return {
     siteId: state.settings?.siteId || "plant-01",
     plant: { name: data.get("plant.name"), area: data.get("plant.area"), shift: data.get("plant.shift") },
     thresholds: {
       pressureBar: { minimum: number("thresholds.pressureBar.minimum", thresholds.pressureBar?.minimum), maximum: number("thresholds.pressureBar.maximum", thresholds.pressureBar?.maximum) },
       flowLpm: { minimum: number("thresholds.flowLpm.minimum", thresholds.flowLpm?.minimum), maximum: number("thresholds.flowLpm.maximum", thresholds.flowLpm?.maximum) },
-      suctionKpa: { minimum: number("thresholds.suctionKpa.minimum", thresholds.suctionKpa?.minimum), maximum: number("thresholds.suctionKpa.maximum", thresholds.suctionKpa?.maximum) }
+      suctionKpa: { minimum: number("thresholds.suctionKpa.minimum", thresholds.suctionKpa?.minimum), maximum: number("thresholds.suctionKpa.maximum", thresholds.suctionKpa?.maximum) },
+      powerMonitor: Object.fromEntries(["voltageV", "currentA", "activePowerW", "powerFactor", "frequencyHz", "apparentPowerVa", "reactivePowerVar", "powerTotalKwh"].map(key => [key, { minimum: number(`thresholds.powerMonitor.${key}.minimum`, thresholds.powerMonitor?.[key]?.minimum), maximum: number(`thresholds.powerMonitor.${key}.maximum`, thresholds.powerMonitor?.[key]?.maximum) }]))
     },
-    sampling: { intervalSeconds: number("sampling.intervalSeconds"), staleAfterSeconds: number("sampling.staleAfterSeconds") },
-    retentionDays: number("retentionDays"),
+    sampling: {
+      intervalSeconds: number("sampling.intervalSeconds", sampling.intervalSeconds ?? 1),
+      staleAfterSeconds: number("sampling.staleAfterSeconds", sampling.staleAfterSeconds ?? 10)
+    },
+    retentionDays: number("retentionDays", state.settings?.retentionDays ?? 7),
     notifications: {
       browserEnabled: data.has("notifications.browserEnabled"), critical: data.has("notifications.critical"),
       warning: data.has("notifications.warning"), info: data.has("notifications.info")
@@ -2184,68 +2595,13 @@ async function saveSettings(event) {
   }
 }
 
-function openAlarmAction(alarmId, status) {
-  state.alarmModal = { type: "action", alarmId, status };
-  state.alarmAuditError = "";
-  renderApp();
-  document.querySelector("#alarm-audit-form textarea")?.focus();
-}
-
-async function openAlarmHistory(alarmId) {
-  state.alarmModal = { type: "history", alarmId };
-  state.alarmHistory = [];
-  state.alarmHistoryLoading = true;
-  state.alarmAuditError = "";
-  renderApp();
-  try {
-    const payload = await authApi.request(`/api/alarms/${encodeURIComponent(alarmId)}/history`);
-    state.alarmHistory = payload.history || [];
-  } catch (error) {
-    state.alarmAuditError = error.message;
-  } finally {
-    state.alarmHistoryLoading = false;
-    renderApp();
-  }
-}
-
-function closeAlarmModal() {
-  state.alarmModal = null;
-  state.alarmHistory = [];
-  state.alarmHistoryLoading = false;
-  state.alarmAuditError = "";
-  renderApp();
-}
-
-async function submitAlarmAction(event) {
-  event.preventDefault();
-  const modal = state.alarmModal;
-  if (!modal || modal.type !== "action") return;
-  const submit = document.querySelector('[type="submit"][form="alarm-audit-form"]');
-  const comment = String(new FormData(event.currentTarget).get("comment") || "").trim();
-  submit.disabled = true;
-  state.alarmAuditError = "";
-  try {
-    await updateAlarm(modal.alarmId, modal.status, comment);
-    state.alarmModal = null;
-    renderApp();
-  } catch (error) {
-    state.alarmAuditError = error.message;
-    renderApp();
-  }
-}
-
-async function updateAlarm(id, nextStatus, comment) {
-  const payload = await authApi.request(`/api/alarms/${encodeURIComponent(id)}`, {
-    method: "PATCH",
-    body: JSON.stringify({ status: nextStatus, comment })
-  });
-  applyAlarm(payload.alarm);
-  showToast(`Alarm marked as ${nextStatus.toLowerCase()}.`);
-}
-
-function navigate(page) {
+function navigate(page, { fromDashboardCard = false } = {}) {
   if (page === "users" && !state.currentUser?.isOwner) return;
+  state.dashboardDeviceReturn = page === "machines" && fromDashboardCard;
+  state.dashboardAlarmReturn = page === "alarms" && fromDashboardCard;
   if (page !== "machine-detail") state.machineLimitsEditing = false;
+  if (page !== "machine-detail") state.machineConfigurationOpen = false;
+  if (page !== "machine-detail") state.machinePowerMonitorOpen = false;
   state.page = page;
   state.mobileOpen = false;
   renderApp();
@@ -2273,6 +2629,7 @@ function navigate(page) {
     const machineId = machines.find(machine => machine.id === state.machineId)?.id;
     if (machineId) loadMachineHistory(machineId, "24h").catch(error => showToast(error.message));
   }
+  if (page === "machine-detail") loadMachineConfigurationForDetail().catch(error => showToast(error.message));
   if (page === "maintenance") loadMaintenance(state, authApi, renderApp);
   if (page === "users") loadManagedUsers().catch(error => showToast(error.message));
   window.scrollTo({ top: 0, behavior: "smooth" });
@@ -2289,13 +2646,13 @@ function updateClock() {
 window.setInterval(() => { if (state.authenticated) updateClock(); }, 1000);
 
 document.addEventListener("visibilitychange", () => {
-  if (!state.authenticated || document.hidden) return;
+  if (!state.authenticated || devicePreviewMode || document.hidden) return;
   if (!telemetryStream || telemetryStream.readyState === EventSource.CLOSED) connectTelemetryStream();
   syncLiveSnapshot();
 });
 
 window.addEventListener("online", () => {
-  if (!state.authenticated) return;
+  if (!state.authenticated || devicePreviewMode) return;
   connectTelemetryStream();
   syncLiveSnapshot();
 });

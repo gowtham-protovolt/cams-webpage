@@ -28,7 +28,7 @@ export function renderLoginPage(brand) {
           </div>
           <div class="form-field">
             <label for="password">Password</label>
-            <div class="input-wrap" id="password-wrap">${icon("lock", "field-icon")}<input id="password" name="password" type="password" autocomplete="current-password" placeholder="Enter password"><button class="password-toggle" id="password-toggle" type="button" aria-label="Show password">${icon("eye")}</button></div>
+            <div class="input-wrap" id="password-wrap">${icon("lock", "field-icon")}<input id="password" name="password" type="password" autocomplete="current-password" placeholder="Enter password"><button class="password-toggle" id="password-toggle" type="button" aria-label="Show password">${icon("eyeOff")}</button></div>
             <p class="field-error" id="password-error"></p>
           </div>
           <div class="form-options">
@@ -64,8 +64,8 @@ export function renderPasswordResetPage(brand, state) {
     <p class="login-intro">Use at least 12 characters. Completing this reset signs out all existing sessions.</p>
     ${state.passwordResetError ? `<div class="auth-result error">${escapeHtml(state.passwordResetError)}</div>` : ""}
     <form id="reset-password-form" novalidate>
-      <div class="form-field"><label for="new-password">New password</label><div class="input-wrap" id="new-password-wrap">${icon("lock", "field-icon")}<input id="new-password" name="password" type="password" minlength="12" maxlength="128" autocomplete="new-password" placeholder="At least 12 characters"><button class="password-toggle" data-password-toggle="new-password" type="button" aria-label="Show password">${icon("eye")}</button></div><p class="field-error" id="new-password-error"></p></div>
-      <div class="form-field"><label for="confirm-password">Confirm new password</label><div class="input-wrap" id="confirm-password-wrap">${icon("lock", "field-icon")}<input id="confirm-password" name="confirmation" type="password" minlength="12" maxlength="128" autocomplete="new-password" placeholder="Repeat new password"><button class="password-toggle" data-password-toggle="confirm-password" type="button" aria-label="Show password">${icon("eye")}</button></div><p class="field-error" id="confirm-password-error"></p></div>
+      <div class="form-field"><label for="new-password">New password</label><div class="input-wrap" id="new-password-wrap">${icon("lock", "field-icon")}<input id="new-password" name="password" type="password" minlength="12" maxlength="128" autocomplete="new-password" placeholder="At least 12 characters"><button class="password-toggle" data-password-toggle="new-password" type="button" aria-label="Show password">${icon("eyeOff")}</button></div><p class="field-error" id="new-password-error"></p></div>
+      <div class="form-field"><label for="confirm-password">Confirm new password</label><div class="input-wrap" id="confirm-password-wrap">${icon("lock", "field-icon")}<input id="confirm-password" name="confirmation" type="password" minlength="12" maxlength="128" autocomplete="new-password" placeholder="Repeat new password"><button class="password-toggle" data-password-toggle="confirm-password" type="button" aria-label="Show password">${icon("eyeOff")}</button></div><p class="field-error" id="confirm-password-error"></p></div>
       <ul class="password-rules" aria-label="Password requirements"><li>12–128 characters</li><li>Both entries must match</li><li>All existing sessions will be revoked</li></ul>
       <button class="primary-btn wide" id="reset-password-button" type="submit"><span>Update password</span>${icon("chevronRight")}</button>
     </form>`);

@@ -13,13 +13,10 @@ import {
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const TICKET_ID = /^TKT_[A-Za-z0-9_-]{1,32}$/;
 const ENUMS = {
-  cluster: ["", "C1", "C2", "C3", "C4"],
-  area: ["", "A1", "A2", "A3"],
   category: ["", "Pressure", "Flow", "Suction", "Communication", "Sensor", "Mechanical", "Gateway"],
-  priority: ["Critical", "High", "Medium", "Low"],
-  maintenance: ["In progress", "Warning", "Closed"]
+  maintenance: ["In progress", "Completed"]
 };
-const MUTABLE_FIELDS = new Set(["cluster", "area", "machineNo", "category", "priority", "assignedTo", "dueBy", "maintenance"]);
+const MUTABLE_FIELDS = new Set(["category", "assignedTo", "dueBy", "maintenance"]);
 
 function requireTicketWrite(request, response, next) {
   if (!new Set(["owner", "operator"]).has(request.auth?.user.role)) {
@@ -47,7 +44,7 @@ function validatedPatch(body) {
       }
       continue;
     }
-    if (typeof value !== "string" || value.trim().length > 80) return { error: "Machine number and assignee must be text under 80 characters." };
+    if (typeof value !== "string" || value.trim().length > 80) return { error: "Assignee must be text under 80 characters." };
     patch[field] = value.trim();
   }
   if (!Object.keys(patch).length) return { error: "Provide at least one ticket field to update." };
@@ -102,11 +99,6 @@ export function ticketsRouter() {
       if (!IDENTIFIER.test(siteId) || !TICKET_ID.test(request.params.id)) return response.status(400).json({ error: "Invalid ticket identifier." });
       const validated = validatedPatch(request.body);
       if (validated.error) return response.status(400).json({ error: validated.error });
-      if (validated.patch.maintenance === "Closed") {
-        const result = await closeTicket(siteId, request.params.id, request.auth.user);
-        if (result.error) return response.status(result.status).json({ error: result.error, code: result.code });
-        return response.json({ ticket: result.ticket });
-      }
       const ticket = await updateTicket(siteId, request.params.id, validated.patch, request.auth.user);
       if (!ticket) return response.status(404).json({ error: "Open ticket not found." });
       response.json({ ticket });

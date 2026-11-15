@@ -1,9 +1,8 @@
 import { formatTicketId, getTicket } from "../data/tickets.js";
-import { customSelect, escapeHtml, icon, pageHead, statusPill } from "./shared.js";
+import { customSelect, deviceLabel, escapeHtml, icon, pageHead, statusPill } from "./shared.js";
 
-const categories = ["Pressure", "Flow", "Suction", "Communication", "Sensor", "Mechanical"];
-const priorities = ["Critical", "High", "Medium", "Low"];
-const maintenanceStatuses = ["In progress", "Closed", "Warning"];
+const maintenanceStatuses = ["In progress", "Completed"];
+const categories = ["Pressure", "Flow", "Suction", "Communication", "Sensor", "Mechanical", "Gateway"];
 
 function displayDate(value) {
   const date = new Date(value);
@@ -34,38 +33,54 @@ function activityList(ticket) {
   ).join("");
 }
 
-export function renderTicketDetailPage({ state, operators = [] }) {
+export function renderTicketDetailPage({ state, operators = [], machines = [] }) {
   const ticket = getTicket(state.ticketId);
   if (!ticket) {
     return `<button class="back-link" type="button" data-page="tickets">${icon("arrowLeft")} Back to tickets</button><section class="panel"><div class="empty-state">${icon("search")}Ticket not found.</div></section>`;
   }
 
-  const statusActions = `<div class="ticket-status-stack">${statusPill(ticket.machineStatus)}</div>`;
+  const machine = machines.find(item => item.id === ticket.machineId && (!ticket.siteId || item.siteId === ticket.siteId));
+  const deviceName = deviceLabel(machine || { id: ticket.machineId, machineName: ticket.machineName });
+  const canEdit = Boolean((state.currentUser?.isOwner || state.currentUser?.role === "operator") && ticket.ticketStatus === "Open");
+  const statusActions = `<div class="ticket-status-stack"><div class="ticket-priority-item"><span>Priority</span>${statusPill(ticket.priority)}</div><div class="ticket-priority-item"><span>Alarm priority</span>${statusPill(ticket.alarmPriority || "Not recorded")}</div></div>`;
+  const operatorHint = state.currentUser?.role === "operator"
+    ? `<div class="ticket-operator-hint"><strong>Operator actions:</strong><span>Update category</span><span>Assign ticket</span><span>Update maintenance status</span><span>Add comments</span><span>Resolve after the alarm clears</span></div>`
+    : "";
   const comments = commentsList(ticket);
   const activity = activityList(ticket);
+  const assignmentField = canEdit
+    ? select("Assigned to", "assignedTo", ticket.assignedTo, ["Unassigned", ...operators])
+    : input("Assigned to", "assignedTo", ticket.assignedTo, { readonly: true });
+  const categoryField = canEdit
+    ? select("Category", "category", ticket.category, categories)
+    : input("Category", "category", ticket.category, { readonly: true });
+  const maintenanceStatus = ticket.maintenance === "Completed" ? "Completed" : "In progress";
+  const maintenanceField = canEdit
+    ? `<label><span>Maintenance status</span>${customSelect("ticket-maintenance", maintenanceStatuses.map(status => [status, status]), maintenanceStatus, { label: "Maintenance status", ariaLabel: "Maintenance status" })}</label>`
+    : input("Maintenance status", "maintenance", ticket.maintenance, { readonly: true });
   return `<button class="back-link" type="button" data-page="tickets">${icon("arrowLeft")} Back to tickets</button>
     ${pageHead(escapeHtml(formatTicketId(ticket.id)), `Problem ticket · ${escapeHtml(ticket.problem)}`, statusActions)}
+    ${operatorHint}
     <section class="panel"><form id="ticket-detail-form" class="machine-form ticket-detail-form">
       <div class="ticket-fields-grid">
         <div class="ticket-form-column">
           ${input("Ticket number", "id", formatTicketId(ticket.id), { readonly: true })}
-          ${select("Cluster", "cluster", ticket.cluster, ["C1", "C2", "C3", "C4"])}
-          ${select("Area", "area", ticket.area, ["A1", "A2", "A3"])}
-          ${input("machine_id", "machineNo", ticket.machineNo)}
-          ${select("Category", "category", ticket.category, categories)}
-          ${select("Priority", "priority", ticket.priority, priorities)}
+          ${input("Cluster", "cluster", ticket.cluster, { readonly: true })}
+          ${input("Area", "area", ticket.area, { readonly: true })}
+          ${input("Device", "machineName", deviceName, { readonly: true })}
+          ${categoryField}
         </div>
         <div class="ticket-form-column">
-          ${select("Assigned to", "assignedTo", ticket.assignedTo, ["Unassigned", ...operators])}
+          ${assignmentField}
           ${input("Opened", "raisedAt", displayDate(ticket.raisedAt), { readonly: true })}
-          <label><span>Maintenance status</span>${customSelect("ticket-maintenance", maintenanceStatuses.map(status => [status, status]), ticket.maintenance, { label: "Maintenance status", ariaLabel: "Maintenance status" })}</label>
+          ${maintenanceField}
         </div>
       </div>
       <label><span>Short description</span><textarea name="description" data-ticket-field="description" readonly>${escapeHtml(ticket.description)}</textarea></label>
     </form>
-    <form id="ticket-comment-form" class="machine-form ticket-comment-form"><label><span>Comment</span><textarea name="comment" placeholder="Add a comment" required></textarea></label><button class="primary-btn" type="submit">Post comment</button></form>
+    ${canEdit ? `<form id="ticket-comment-form" class="machine-form ticket-comment-form"><label><span>Comment</span><textarea name="comment" placeholder="Add a comment" required></textarea></label></form>` : ""}
       <div class="ticket-comments">${comments || `<div class="empty-state">No comments yet.</div>`}</div>
-    <div class="ticket-form-actions"><button class="primary-btn" type="submit" form="ticket-detail-form">Update</button><button class="secondary-btn" id="resolve-ticket" type="button">Resolve ticket</button></div>
+    ${canEdit ? `<div class="ticket-form-actions"><button class="primary-btn" type="submit" form="ticket-comment-form">Post comment</button><button class="secondary-btn" id="resolve-ticket" type="button">Resolve ticket</button></div>` : ""}
     </section>
     <section class="panel ticket-activity-panel"><header class="panel-head"><div class="panel-title"><h2>Activity history</h2></div></header>
       <div class="ticket-activity">${activity}</div>

@@ -3,7 +3,6 @@
 #include <ModbusMaster.h>
 #include <MQTT.h>
 #include <WiFi.h>
-#include <WiFiClientSecure.h>
 #include <sys/time.h>
 #include <time.h>
 
@@ -20,7 +19,7 @@
 
 HardwareSerial plcSerial(2);
 ModbusMaster plc;
-WiFiClientSecure networkClient;
+WiFiClient networkClient;
 MQTTClient mqttClient(1536);
 OfflineTelemetryQueue telemetryQueue;
 
@@ -77,16 +76,16 @@ bool readPlcSample(PlcSample &sample) {
   return true;
 }
 
-float pressureBarFromPv(int32_t pv3) {
-  return ((static_cast<float>(pv3) - 1999.0f) * 7.0f) / 5569.0f;
+float pressureBarFromPv(int32_t pv2) {
+  return ((static_cast<float>(pv2) - 1999.0f) * 7.0f) / 5569.0f;
 }
 
 float flowLpmFromPv(int32_t pv1) {
   return (static_cast<float>(pv1) - 2000.09f) / 3.95805f;
 }
 
-float suctionKpaFromPv(int32_t pv2) {
-  return (static_cast<float>(pv2) - 6015.44f) / 41.1673f;
+float suctionKpaFromPv(int32_t pv3) {
+  return (static_cast<float>(pv3) - 6015.44f) / 41.1673f;
 }
 
 const char *calibrationQuality(float value, float verifiedMinimum, float verifiedMaximum, uint16_t errorCode) {
@@ -164,8 +163,8 @@ bool publishRecord(const BufferedTelemetryRecord &record) {
   formatUtc(record.observedAtMs, timestamp, sizeof(timestamp));
 
   const float flowLpm = flowLpmFromPv(record.pv1);
-  const float suctionKpa = suctionKpaFromPv(record.pv2);
-  const float pressureBar = pressureBarFromPv(record.pv3);
+  const float pressureBar = pressureBarFromPv(record.pv2);
+  const float suctionKpa = suctionKpaFromPv(record.pv3);
   const bool hasAlarm = record.err1 != 0 || record.err2 != 0 || record.err3 != 0;
   timeval now{};
   gettimeofday(&now, nullptr);
@@ -187,8 +186,8 @@ bool publishRecord(const BufferedTelemetryRecord &record) {
 
   JsonObject errors = document["errors"].to<JsonObject>();
   errors["flow"] = record.err1;
-  errors["suction"] = record.err2;
-  errors["pressure"] = record.err3;
+  errors["pressure"] = record.err2;
+  errors["suction"] = record.err3;
 
   JsonObject metrics = document["metrics"].to<JsonObject>();
   metrics["flowLpm"] = roundf(flowLpm * 1000.0f) / 1000.0f;
@@ -197,8 +196,8 @@ bool publishRecord(const BufferedTelemetryRecord &record) {
 
   JsonObject quality = document["quality"].to<JsonObject>();
   quality["flow"] = calibrationQuality(flowLpm, -22.0f, 50.0f, record.err1);
-  quality["suction"] = calibrationQuality(suctionKpa, 0.6f, 1.8f, record.err2);
-  quality["pressure"] = calibrationQuality(pressureBar, 0.0f, 7.0f, record.err3);
+  quality["pressure"] = calibrationQuality(pressureBar, 0.0f, 7.0f, record.err2);
+  quality["suction"] = calibrationQuality(suctionKpa, 0.6f, 1.8f, record.err3);
   quality["modbus"] = "good";
 
   char payload[1400];
@@ -267,13 +266,6 @@ void setup() {
   plc.postTransmission(enableRs485Receive);
 
   WiFi.mode(WIFI_STA);
-#ifdef MQTT_CA_CERT
-  networkClient.setCACert(MQTT_CA_CERT);
-#else
-  // Keep the cloud connection encrypted during commissioning. Add the EMQX
-  // deployment CA certificate to secrets.h before production rollout.
-  networkClient.setInsecure();
-#endif
   mqttClient.begin(MQTT_HOST, MQTT_PORT, networkClient);
   mqttClient.onMessage(handleMqttMessage);
   mqttClient.setWill(STATUS_TOPIC, OFFLINE_STATUS_PAYLOAD, true, 1);

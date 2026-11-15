@@ -1,7 +1,7 @@
 import { deviceLabel, escapeHtml, icon, telemetryUpdateTime } from "./shared.js";
 
-function treeValue(label, value) {
-  const display = value === null || value === undefined ? "—" : `${value}`;
+function treeValue(label, value, quality) {
+  const display = quality === "bad" ? "No signal" : value === null || value === undefined ? "—" : `${value}`;
   return `<div class="data-tree-value"><span>${escapeHtml(label)}</span><strong>${escapeHtml(display)}</strong></div>`;
 }
 
@@ -18,7 +18,7 @@ export function renderLiveDataPanel({ state, machines, machineHistory }) {
   }
   const dates = [...byDate].map(([date, entries], dateIndex) => `<details class="data-tree-node data-tree-date" ${dateIndex === 0 ? "open" : ""}><summary>${icon("calendar")}<strong>${date}</strong><span>${entries.length} sample${entries.length === 1 ? "" : "s"}</span></summary><div class="data-tree-children">${entries.map(({ reading, observed }, sampleIndex) => {
     const time = observed.toLocaleTimeString("en-GB", { timeZone: "Asia/Kolkata", hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" }).replaceAll(":", "-");
-    return `<details class="data-tree-node data-tree-sample" ${dateIndex === 0 && sampleIndex === 0 ? "open" : ""}><summary>${icon("clock")}<strong>${time}</strong><span>${escapeHtml(reading.status || "unknown")}</span></summary><div class="data-tree-values">${treeValue("flow", reading.metrics?.flowLpm)}${treeValue("pressure", reading.metrics?.pressureBar)}${treeValue("suction", reading.metrics?.suctionKpa)}</div></details>`;
+    return `<details class="data-tree-node data-tree-sample" ${dateIndex === 0 && sampleIndex === 0 ? "open" : ""}><summary>${icon("clock")}<strong>${time}</strong><span>${escapeHtml(reading.status || "unknown")}</span></summary><div class="data-tree-values">${treeValue("flow", reading.metrics?.flowLpm, reading.quality?.flow)}${treeValue("pressure", reading.metrics?.pressureBar, reading.quality?.pressure)}${treeValue("suction", reading.metrics?.suctionKpa, reading.quality?.suction)}${treeValue("temperature", reading.metrics?.temperatureC, reading.quality?.temperature || (reading.metrics?.temperatureC == null ? "bad" : "good"))}</div></details>`;
   }).join("")}</div></details>`).join("");
   const lastSampleAge = state.lastTelemetryAt ? Date.now() - new Date(state.lastTelemetryAt).getTime() : Infinity;
   const sampleIsLive = state.telemetryConnected && lastSampleAge <= Number(state.settings?.sampling?.staleAfterSeconds || 10) * 1000;

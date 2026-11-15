@@ -1,6 +1,11 @@
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const STATUSES = new Set(["running", "stopped", "alarm", "offline"]);
 const QUALITY_VALUES = new Set(["good", "uncertain", "bad"]);
+const DISCONNECTED_SENSOR_ERROR = 1001;
+// CAMS PLC channels are calibrated around these raw zero points: flow/pressure
+// near 2000 and suction near 6000. Values below these conservative limits are
+// an open-wire/no-signal condition, not a valid process reading.
+const RAW_SIGNAL_MINIMUMS = Object.freeze({ flow: 1000, pressure: 1000, suction: 3000 });
 const INDIA_OFFSET_MS = 5.5 * 60 * 60 * 1000;
 const MAX_BACKFILL_AGE_MS = 8 * 24 * 60 * 60 * 1000;
 const MAX_FUTURE_SKEW_MS = 5 * 60 * 1000;
@@ -30,6 +35,10 @@ function boundedInteger(value, name, minimum, maximum) {
   return value;
 }
 
+function optionalBoundedNumber(value, name, minimum, maximum) {
+  return value === undefined ? undefined : boundedNumber(value, name, minimum, maximum);
+}
+
 function optionalObject(value, name) {
   if (value === undefined) return undefined;
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${name} must be an object.`);
@@ -40,6 +49,25 @@ function qualityValue(value, name) {
   const normalized = String(value || "").toLowerCase();
   if (!QUALITY_VALUES.has(normalized)) throw new Error(`${name} must be good, uncertain, or bad.`);
   return normalized;
+}
+
+function applyRawSignalDiagnostics(raw, errors, quality) {
+  if (!raw) return { errors, quality };
+  const disconnected = {
+    flow: raw.pv1 < RAW_SIGNAL_MINIMUMS.flow,
+    pressure: raw.pv2 < RAW_SIGNAL_MINIMUMS.pressure,
+    suction: raw.pv3 < RAW_SIGNAL_MINIMUMS.suction
+  };
+  if (!Object.values(disconnected).some(Boolean)) return { errors, quality };
+
+  const normalizedErrors = errors || { flow: 0, suction: 0, pressure: 0 };
+  const normalizedQuality = quality || { flow: "uncertain", suction: "uncertain", pressure: "uncertain", modbus: "good" };
+  for (const sensor of ["flow", "pressure", "suction"]) {
+    if (!disconnected[sensor]) continue;
+    if (normalizedErrors[sensor] === 0) normalizedErrors[sensor] = DISCONNECTED_SENSOR_ERROR;
+    normalizedQuality[sensor] = "bad";
+  }
+  return { errors: normalizedErrors, quality: normalizedQuality };
 }
 
 export function parseTelemetryMessage(topic, payload, receivedAt = new Date()) {
@@ -87,6 +115,36 @@ export function parseTelemetryMessage(topic, payload, receivedAt = new Date()) {
   const source = String(body.source || "").trim();
   if (source !== "esp32-s3-rs485") throw new Error("source must be esp32-s3-rs485.");
 
+  const normalizedRaw = raw ? {
+    pv1: boundedInteger(raw.pv1, "raw.pv1", -2147483648, 2147483647),
+    pv2: boundedInteger(raw.pv2, "raw.pv2", -2147483648, 2147483647),
+    pv3: boundedInteger(raw.pv3, "raw.pv3", -2147483648, 2147483647)
+  } : undefined;
+  const normalizedErrors = errors ? {
+    flow: boundedInteger(errors.flow, "errors.flow", 0, 65535),
+    suction: boundedInteger(errors.suction, "errors.suction", 0, 65535),
+    pressure: boundedInteger(errors.pressure, "errors.pressure", 0, 65535)
+  } : undefined;
+  const normalizedQuality = quality ? {
+    flow: qualityValue(quality.flow, "quality.flow"),
+    suction: qualityValue(quality.suction, "quality.suction"),
+    pressure: qualityValue(quality.pressure, "quality.pressure"),
+    modbus: qualityValue(quality.modbus, "quality.modbus"),
+    ...(quality.temperature === undefined ? {} : { temperature: qualityValue(quality.temperature, "quality.temperature") })
+  } : undefined;
+  const signalDiagnostics = applyRawSignalDiagnostics(normalizedRaw, normalizedErrors, normalizedQuality);
+  const powerMonitor = optionalObject(metrics.powerMonitor, "metrics.powerMonitor");
+  const normalizedPowerMonitor = powerMonitor ? {
+    voltageV: optionalBoundedNumber(powerMonitor.voltageV, "powerMonitor.voltageV", 0, 1000),
+    currentA: optionalBoundedNumber(powerMonitor.currentA, "powerMonitor.currentA", 0, 10000),
+    activePowerW: optionalBoundedNumber(powerMonitor.activePowerW, "powerMonitor.activePowerW", -1e9, 1e9),
+    powerFactor: optionalBoundedNumber(powerMonitor.powerFactor, "powerMonitor.powerFactor", -1, 1),
+    frequencyHz: optionalBoundedNumber(powerMonitor.frequencyHz, "powerMonitor.frequencyHz", 0, 1000),
+    apparentPowerVa: optionalBoundedNumber(powerMonitor.apparentPowerVa, "powerMonitor.apparentPowerVa", 0, 1e9),
+    reactivePowerVar: optionalBoundedNumber(powerMonitor.reactivePowerVar, "powerMonitor.reactivePowerVar", -1e9, 1e9),
+    powerTotalKwh: optionalBoundedNumber(powerMonitor.powerTotalKwh, "powerMonitor.powerTotalKwh", 0, 1e12)
+  } : undefined;
+
   return {
     series: { siteId, machineId },
     hierarchy: hierarchyFor(machineId, observedAt),
@@ -98,24 +156,12 @@ export function parseTelemetryMessage(topic, payload, receivedAt = new Date()) {
       pressureBar: boundedNumber(metrics.pressureBar, "pressureBar", -1.5, 20),
       flowLpm: boundedNumber(metrics.flowLpm, "flowLpm", -500, 500),
       suctionKpa,
-      ...(metrics.temperatureC === undefined ? {} : { temperatureC: boundedNumber(metrics.temperatureC, "temperatureC", -40, 150) })
+      ...(metrics.temperatureC === undefined ? {} : { temperatureC: boundedNumber(metrics.temperatureC, "temperatureC", -40, 150) }),
+      ...(normalizedPowerMonitor ? { powerMonitor: normalizedPowerMonitor } : {})
     },
-    ...(raw ? { raw: {
-      pv1: boundedInteger(raw.pv1, "raw.pv1", -2147483648, 2147483647),
-      pv2: boundedInteger(raw.pv2, "raw.pv2", -2147483648, 2147483647),
-      pv3: boundedInteger(raw.pv3, "raw.pv3", -2147483648, 2147483647)
-    } } : {}),
-    ...(errors ? { errors: {
-      flow: boundedInteger(errors.flow, "errors.flow", 0, 65535),
-      suction: boundedInteger(errors.suction, "errors.suction", 0, 65535),
-      pressure: boundedInteger(errors.pressure, "errors.pressure", 0, 65535)
-    } } : {}),
-    ...(quality ? { quality: {
-      flow: qualityValue(quality.flow, "quality.flow"),
-      suction: qualityValue(quality.suction, "quality.suction"),
-      pressure: qualityValue(quality.pressure, "quality.pressure"),
-      modbus: qualityValue(quality.modbus, "quality.modbus")
-    } } : {}),
+    ...(normalizedRaw ? { raw: normalizedRaw } : {}),
+    ...(signalDiagnostics.errors ? { errors: signalDiagnostics.errors } : {}),
+    ...(signalDiagnostics.quality ? { quality: signalDiagnostics.quality } : {}),
     ...(calibrationVersion ? { calibrationVersion } : {}),
     source,
     transport: "mqtt",

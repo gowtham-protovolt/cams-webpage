@@ -7,6 +7,7 @@ export { renderMachineDetailPage } from "./machine-detail.js";
 export { renderMachinesPage } from "./machines.js";
 export { renderMaintenancePage } from "./maintenance.js";
 export { renderProfilePage } from "./profile.js";
+export { renderPowerMonitorPanel } from "./power-monitor.js";
 export { renderSettingsPage } from "./settings.js";
 export { renderTrendsPage } from "./trends.js";
 export { renderTicketsPage } from "./tickets.js";

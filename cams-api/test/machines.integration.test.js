@@ -8,7 +8,7 @@ import { loadConfig } from "../src/config.js";
 import { parseTelemetryMessage } from "../src/telemetry/schema.js";
 import { ingestTelemetry } from "../src/telemetry/store.js";
 
-const hasDatabase = Boolean(process.env.MONGODB_URI);
+const hasDatabase = Boolean(process.env.MONGODB_URI || (process.env.MONGODB_APP_USERNAME && process.env.MONGODB_APP_PASSWORD));
 
 async function login(baseUrl, origin, identity, password) {
   const response = await fetch(`${baseUrl}/api/auth/login`, {
@@ -77,6 +77,35 @@ test("owners manage machines while deletion preserves history and blocks MQTT un
     assert.equal(created.status, 201);
     assert.equal((await created.json()).machine.status, "offline");
 
+    const configurationUrl = `${baseUrl}/api/machines/CAMS-17/configuration?siteId=plant-01`;
+    const configurationResponse = await fetch(configurationUrl, { headers: { Origin: origin, Cookie: ownerCookie } });
+    assert.equal(configurationResponse.status, 200);
+    const deviceConfiguration = (await configurationResponse.json()).configuration;
+    assert.equal(deviceConfiguration.general.deviceName, "Compressor 17");
+    deviceConfiguration.general.deviceName = "Compressor 17 configured";
+    const deniedConfigurationUpdate = await fetch(configurationUrl, {
+      method: "PUT", headers: { ...jsonHeaders, Cookie: viewerCookie },
+      body: JSON.stringify(deviceConfiguration)
+    });
+    assert.equal(deniedConfigurationUpdate.status, 403);
+    const savedConfiguration = await fetch(configurationUrl, {
+      method: "PUT", headers: { ...jsonHeaders, Cookie: ownerCookie },
+      body: JSON.stringify(deviceConfiguration)
+    });
+    assert.equal(savedConfiguration.status, 200);
+    assert.equal((await savedConfiguration.json()).configuration.general.deviceName, "Compressor 17 configured");
+    const persistedConfiguration = await fetch(configurationUrl, { headers: { Origin: origin, Cookie: ownerCookie } });
+    assert.equal((await persistedConfiguration.json()).configuration.general.deviceName, "Compressor 17 configured");
+    const rejectedSecret = {
+      ...deviceConfiguration,
+      data: { ...deviceConfiguration.data, brokerPassword: "never-accept-secrets" }
+    };
+    const invalidConfiguration = await fetch(configurationUrl, {
+      method: "PUT", headers: { ...jsonHeaders, Cookie: ownerCookie },
+      body: JSON.stringify(rejectedSecret)
+    });
+    assert.equal(invalidConfiguration.status, 400);
+
     const duplicate = await fetch(`${baseUrl}/api/machines`, {
       method: "POST", headers: { ...jsonHeaders, Cookie: ownerCookie },
       body: JSON.stringify({ siteId: "plant-01", machineId: "CAMS-17", name: "Duplicate", zone: "Line B" })
@@ -95,6 +124,10 @@ test("owners manage machines while deletion preserves history and blocks MQTT un
     });
     assert.equal(updated.status, 200);
     assert.equal((await updated.json()).machine.zone, "Area 01");
+    const configurationAfterDeviceEdit = await fetch(configurationUrl, { headers: { Origin: origin, Cookie: ownerCookie } });
+    const updatedDeviceConfiguration = (await configurationAfterDeviceEdit.json()).configuration;
+    assert.equal(updatedDeviceConfiguration.general.deviceName, "Main Compressor 17");
+    assert.equal(updatedDeviceConfiguration.general.location, "Cluster 04 · Area 01");
 
     const clusterResponse = await fetch(`${baseUrl}/api/clusters?siteId=plant-01`, { headers: { Origin: origin, Cookie: ownerCookie } });
     assert.equal(clusterResponse.status, 200);
@@ -181,6 +214,12 @@ test("owners manage machines while deletion preserves history and blocks MQTT un
 
     const activeList = await fetch(`${baseUrl}/api/machines`, { headers: { Origin: origin, Cookie: ownerCookie } });
     assert.equal((await activeList.json()).machines.length, 0);
+    const dashboardSummary = await fetch(`${baseUrl}/api/dashboard/summary?siteId=plant-01`, { headers: { Origin: origin, Cookie: ownerCookie } });
+    assert.equal(dashboardSummary.status, 200);
+    const dashboardData = await dashboardSummary.json();
+    assert.ok(Array.isArray(dashboardData.machines));
+    assert.ok(Array.isArray(dashboardData.alarms));
+    assert.ok(Array.isArray(dashboardData.tickets));
     const removedList = await fetch(`${baseUrl}/api/machines/removed?siteId=plant-01`, { headers: { Origin: origin, Cookie: ownerCookie } });
     assert.equal((await removedList.json()).machines[0].id, "CAMS-17");
 
@@ -200,6 +239,38 @@ test("owners manage machines while deletion preserves history and blocks MQTT un
 
     const unknown = await ingestTelemetry(telemetry("CAMS-18", 18001, now), config);
     assert.deepEqual(unknown, { duplicate: false, ignored: true, reason: "machine-not-registered" });
+
+    const historyFrom = new Date(now.getTime() - 1000).toISOString();
+    const historyTo = new Date(now.getTime() + 3000).toISOString();
+    const rangedHistory = await fetch(
+      `${baseUrl}/api/machines/CAMS-17/telemetry?siteId=plant-01&from=${encodeURIComponent(historyFrom)}&to=${encodeURIComponent(historyTo)}&limit=1`,
+      { headers: { Origin: origin, Cookie: ownerCookie } }
+    );
+    assert.equal(rangedHistory.status, 200);
+    assert.equal((await rangedHistory.json()).readings[0].sequence, 17003);
+
+    const retainedTicketGeneration = `permanent-delete-machine-${process.pid}`;
+    const retainedAlarmId = `permanent-delete-machine-alarm-${process.pid}`;
+    await Promise.all([
+      db.collection("tickets").insertOne({ siteId: "plant-01", id: retainedTicketGeneration, generationKey: retainedTicketGeneration, machineId: "CAMS-17" }),
+      db.collection("alarmAudit").insertOne({ alarmId: retainedAlarmId, machineId: "CAMS-17", action: "History retained", createdAt: now })
+    ]);
+    const activePermanentDelete = await fetch(`${baseUrl}/api/machines/CAMS-17/permanent?siteId=plant-01`, {
+      method: "DELETE", headers: { Origin: origin, Cookie: ownerCookie }
+    });
+    assert.equal(activePermanentDelete.status, 404);
+    const removedAgain = await fetch(`${baseUrl}/api/machines/CAMS-17?siteId=plant-01`, {
+      method: "DELETE", headers: { Origin: origin, Cookie: ownerCookie }
+    });
+    assert.equal(removedAgain.status, 200);
+    const permanentDelete = await fetch(`${baseUrl}/api/machines/CAMS-17/permanent?siteId=plant-01`, {
+      method: "DELETE", headers: { Origin: origin, Cookie: ownerCookie }
+    });
+    assert.equal(permanentDelete.status, 200);
+    assert.equal(await db.collection("machines").countDocuments({ siteId: "plant-01", machineId: "CAMS-17" }), 0);
+    assert.equal(await db.collection("telemetry").countDocuments({ "series.machineId": "CAMS-17" }), 2);
+    assert.equal(await db.collection("tickets").countDocuments({ generationKey: retainedTicketGeneration }), 1);
+    assert.equal(await db.collection("alarmAudit").countDocuments({ alarmId: retainedAlarmId }), 1);
   } finally {
     await new Promise(resolve => server.close(resolve));
     await closeDatabase();

@@ -2,8 +2,15 @@ import { randomUUID } from "node:crypto";
 import { getDatabase } from "../db.js";
 import { telemetryEvents } from "../telemetry/events.js";
 
-export const TICKET_INTERVAL_MS = 60 * 60 * 1000;
+export const TICKET_PRIORITY_ESCALATION_INTERVAL_MS = 2 * 60 * 60 * 1000;
 const ACTIVE_ALARM_STATUSES = ["Active", "Acknowledged"];
+const TICKET_PRIORITIES = ["Low", "Medium", "High"];
+
+export function automatedTicketPriority(activeSince, now = new Date()) {
+  const elapsed = Math.max(0, now.getTime() - new Date(activeSince).getTime());
+  const escalations = Math.floor(elapsed / TICKET_PRIORITY_ESCALATION_INTERVAL_MS);
+  return TICKET_PRIORITIES[Math.min(escalations, TICKET_PRIORITIES.length - 1)];
+}
 
 function activeProblems(alarms) {
   return alarms
@@ -21,11 +28,19 @@ export function describeProblems(problems) {
   return problems.map((problem, index) => `${index + 1}. ${problem.parameter}: ${problem.message}`).join("\n");
 }
 
-function ticketPriority(problems) {
-  return problems.some(problem => problem.severity === "Critical") ? "Critical" : "Medium";
-}
-
 function publicTicket(ticket) {
+  const raisedAt = ticket.raisedAt || ticket.updatedAt || new Date();
+  const priorityAt = ticket.machineStatus === "Resolved"
+    ? ticket.problemResolvedAt || ticket.closedAt || ticket.updatedAt || raisedAt
+    : new Date();
+  const automaticPriority = TICKET_PRIORITIES.includes(ticket.priority)
+    ? ticket.priority
+    : automatedTicketPriority(raisedAt, priorityAt);
+  const activeAlarmPriority = (ticket.activeProblems || []).some(problem => problem.severity === "Critical")
+    ? "Critical"
+    : (ticket.activeProblems || []).some(problem => problem.severity === "Warning")
+      ? "Warning"
+      : "";
   return {
     id: ticket.id,
     siteId: ticket.siteId,
@@ -34,12 +49,13 @@ function publicTicket(ticket) {
     area: ticket.area || "",
     machineNo: ticket.machineNo || "",
     category: ticket.category || "",
-    priority: ticket.priority,
+    priority: automaticPriority,
+    alarmPriority: ticket.alarmPriority || activeAlarmPriority || (ticket.machineStatus === "Critical" || ticket.machineStatus === "Warning" ? ticket.machineStatus : "Not recorded"),
     problem: ticket.problem,
     description: ticket.description,
     activeProblems: ticket.activeProblems || [],
     machineStatus: ticket.machineStatus,
-    maintenance: ticket.maintenance,
+    maintenance: ticket.maintenance === "Completed" || ticket.maintenance === "Closed" ? "Completed" : "In progress",
     ticketStatus: ticket.ticketStatus,
     assignedTo: ticket.assignedTo,
     group: ticket.group || "",
@@ -84,10 +100,13 @@ async function publishTickets(siteId, machineId, incidentId) {
   for (const ticket of tickets) await publishTicket(ticket);
 }
 
-async function createTicket(siteId, machineId, machine, problems, incidentId, cycle, raisedAt) {
+async function createTicket(siteId, machineId, machine, problems, incidentId, raisedAt, priority) {
   const db = getDatabase();
-  const generationKey = `${incidentId}:${cycle}`;
-  let ticket = await db.collection("tickets").findOne({ siteId, machineId, generationKey });
+  const generationKey = incidentId;
+  let ticket = await db.collection("tickets").findOne(
+    { siteId, machineId, incidentId },
+    { sort: { raisedAt: 1 } }
+  );
   if (ticket) return ticket;
 
   const counter = await db.collection("ticketCounters").findOneAndUpdate(
@@ -106,7 +125,8 @@ async function createTicket(siteId, machineId, machine, problems, incidentId, cy
     area: machine?.area || "",
     machineNo: machine?.machineNo || "",
     category: problems[0]?.parameter || "",
-    priority: ticketPriority(problems),
+    priority,
+    alarmPriority: problems.some(problem => problem.severity === "Critical") ? "Critical" : "Warning",
     problem: ticketProblemSummary(problems),
     description,
     activeProblems: problems,
@@ -126,7 +146,7 @@ async function createTicket(siteId, machineId, machine, problems, incidentId, cy
     await db.collection("tickets").insertOne(ticket);
   } catch (error) {
     if (error.code !== 11000) throw error;
-    ticket = await db.collection("tickets").findOne({ siteId, machineId, generationKey });
+    ticket = await db.collection("tickets").findOne({ siteId, machineId, incidentId });
     if (!ticket) throw error;
   }
   await recordTicketActivity(ticket, {
@@ -149,10 +169,7 @@ async function startIncident(states, key, siteId, machineId, problems, now) {
           machineId,
           active: true,
           incidentId,
-          cycle: 0,
           activeSince: now,
-          lastTicketAt: null,
-          nextTicketAt: now,
           activeProblems: problems,
           updatedAt: now
         },
@@ -189,7 +206,7 @@ export async function reconcileMachineTickets(siteId, machineId, now = new Date(
     if (state?.active) {
       await states.updateOne(
         { _id: key, active: true, incidentId: state.incidentId },
-        { $set: { active: false, activeProblems: [], nextTicketAt: null, resolvedAt: now, updatedAt: now } }
+        { $set: { active: false, activeProblems: [], resolvedAt: now, updatedAt: now } }
       );
       const openTickets = await ticketCollection.find({
         siteId,
@@ -230,7 +247,7 @@ export async function reconcileMachineTickets(siteId, machineId, now = new Date(
           description: describeProblems(problems),
           activeProblems: problems,
           category: problems[0]?.parameter || "",
-          priority: ticketPriority(problems),
+          alarmPriority: problems.some(problem => problem.severity === "Critical") ? "Critical" : "Warning",
           machineStatus: problems.some(problem => problem.severity === "Critical") ? "Critical" : "Warning",
           updatedAt: now
         }
@@ -253,31 +270,28 @@ export async function reconcileMachineTickets(siteId, machineId, now = new Date(
   }
 
   state = await states.findOne({ _id: key });
-  let cyclesCreated = 0;
-  while (state?.active && state.nextTicketAt && state.nextTicketAt <= now && cyclesCreated < 24) {
-    const scheduledAt = state.nextTicketAt;
-    const nextCycle = state.cycle + 1;
-    await createTicket(siteId, machineId, machine, problems, state.incidentId, nextCycle, scheduledAt);
-    const advanced = await states.updateOne(
-      {
-        _id: key,
-        active: true,
-        incidentId: state.incidentId,
-        cycle: state.cycle,
-        nextTicketAt: scheduledAt
-      },
-      {
-        $set: {
-          cycle: nextCycle,
-          lastTicketAt: scheduledAt,
-          nextTicketAt: new Date(scheduledAt.getTime() + TICKET_INTERVAL_MS),
-          updatedAt: now
-        }
-      }
+  const priority = automatedTicketPriority(state.activeSince, now);
+  let ticket = await ticketCollection.findOne(
+    { siteId, machineId, incidentId: state.incidentId },
+    { sort: { raisedAt: 1 } }
+  );
+  if (!ticket) {
+    ticket = await createTicket(siteId, machineId, machine, problems, state.incidentId, state.activeSince, priority);
+  } else if (ticket.ticketStatus === "Open" && ticket.priority !== priority) {
+    const previousPriority = ticket.priority;
+    ticket = await ticketCollection.findOneAndUpdate(
+      { siteId, machineId, id: ticket.id, ticketStatus: "Open", priority: previousPriority },
+      { $set: { priority, updatedAt: now } },
+      { returnDocument: "after" }
     );
-    if (!advanced.modifiedCount) break;
-    cyclesCreated += 1;
-    state = await states.findOne({ _id: key });
+    if (ticket) {
+      await recordTicketActivity(ticket, {
+        action: "Priority escalated",
+        details: `Priority changed from ${previousPriority} to ${priority} because the machine problem remains unresolved.`,
+        at: now
+      });
+      await publishTicket(ticket);
+    }
   }
   return ticketCollection.find({ siteId, machineId }).sort({ raisedAt: -1 }).toArray();
 }
@@ -339,6 +353,18 @@ export async function recordMachineTicketActivity(siteId, machineId, { action, a
   }
 }
 
+async function hasUnresolvedTicketProblems(ticket) {
+  const state = await getDatabase().collection("ticketMachineState").findOne(
+    { _id: `${ticket.siteId}/${ticket.machineId}` },
+    { projection: { active: 1, incidentId: 1 } }
+  );
+  if (ticket.incidentId && state?.incidentId === ticket.incidentId) {
+    return state.active === true && await hasActiveMachineProblems(ticket.siteId, ticket.machineId);
+  }
+  if (ticket.machineStatus === "Resolved" || (ticket.incidentId && state?.incidentId)) return false;
+  return hasActiveMachineProblems(ticket.siteId, ticket.machineId);
+}
+
 export async function updateTicket(siteId, id, patch, actor, now = new Date()) {
   const collection = getDatabase().collection("tickets");
   const before = await collection.findOne({ siteId, id, ticketStatus: "Open" });
@@ -353,8 +379,10 @@ export async function updateTicket(siteId, id, patch, actor, now = new Date()) {
   );
   if (!ticket) return null;
   if (changes.length) {
-    const activityAction = patch.assignedTo !== undefined
-      ? "Assignment changed"
+    const activityAction = patch.category !== undefined
+      ? "Category changed"
+      : patch.assignedTo !== undefined
+        ? "Assignment changed"
       : patch.maintenance !== undefined
         ? "Maintenance status changed"
         : "Ticket updated";
@@ -373,12 +401,12 @@ export async function closeTicket(siteId, id, actor, now = new Date()) {
   const ticket = await getDatabase().collection("tickets").findOne({ siteId, id });
   if (!ticket) return { error: "Ticket not found.", status: 404 };
   if (ticket.ticketStatus === "Closed") return { error: "Ticket is already closed.", status: 409 };
-  if (await hasActiveMachineProblems(siteId, ticket.machineId)) {
+  if (await hasUnresolvedTicketProblems(ticket)) {
     return { error: "Machine is still in progress. Resolve all active problems before closing this ticket.", status: 409, code: "MACHINE_IN_PROGRESS" };
   }
   const updated = await getDatabase().collection("tickets").findOneAndUpdate(
     { siteId, id, ticketStatus: "Open" },
-    { $set: { ticketStatus: "Closed", machineStatus: "Resolved", maintenance: "Closed", closedAt: now, closedBy: actor?.id || null, updatedAt: now } },
+    { $set: { ticketStatus: "Closed", machineStatus: "Resolved", maintenance: "Completed", closedAt: now, closedBy: actor?.id || null, updatedAt: now } },
     { returnDocument: "after" }
   );
   if (!updated) return { error: "Ticket is already closed.", status: 409 };
@@ -396,9 +424,6 @@ export async function addTicketComment(siteId, id, text, actor, now = new Date()
   const ticket = await getDatabase().collection("tickets").findOne({ siteId, id });
   if (!ticket) return { error: "Ticket not found.", status: 404 };
   if (ticket.ticketStatus === "Closed") return { error: "Ticket is closed and cannot receive comments.", status: 409 };
-  if (await hasActiveMachineProblems(siteId, ticket.machineId)) {
-    return { error: "Machine is still in progress. Resolve all active problems before posting a comment.", status: 409, code: "MACHINE_IN_PROGRESS" };
-  }
   const comment = {
     id: randomUUID(),
     by: actor?.displayName || actor?.username || "CAMS user",

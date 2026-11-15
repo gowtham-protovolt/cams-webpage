@@ -30,8 +30,7 @@ results, status updates, and helping reviewers understand the UI.
 The review-stage UI and its local real-data path are complete. Authentication,
 MongoDB, MQTT ingestion, protected telemetry APIs, and live dashboard updates
 work in the local integration environment. Production services are not configured.
-Authenticated machine-fleet exports are available in XLSX; telemetry exports are
-available in XLSX and PDF.
+Authenticated machine-fleet and telemetry exports are available in XLSX and PDF.
 
 ## Hardware requirements
 

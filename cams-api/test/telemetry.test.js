@@ -9,10 +9,10 @@ const validPayload = Buffer.from(JSON.stringify({
   status: "running",
   source: "esp32-s3-rs485",
   calibrationVersion: "empirical-2026-10-06-v1",
-  metrics: { pressureBar: 7.2, flowLpm: -21.5, suctionKpa: 1.2 },
+  metrics: { pressureBar: 7.2, flowLpm: -21.5, suctionKpa: 1.2, temperatureC: 34.5 },
   raw: { pv1: 1915, pv2: 6066, pv3: 7173 },
   errors: { flow: 0, suction: 0, pressure: 0 },
-  quality: { flow: "good", suction: "good", pressure: "uncertain", modbus: "good" }
+  quality: { flow: "good", suction: "good", pressure: "uncertain", temperature: "good", modbus: "good" }
 }));
 
 test("parses a valid CAMS MQTT telemetry message", () => {
@@ -20,6 +20,8 @@ test("parses a valid CAMS MQTT telemetry message", () => {
   assert.deepEqual(telemetry.series, { siteId: "demo", machineId: "CAMS-01" });
   assert.equal(telemetry.metrics.pressureBar, 7.2);
   assert.equal(telemetry.metrics.flowLpm, -21.5);
+  assert.equal(telemetry.metrics.temperatureC, 34.5);
+  assert.equal(telemetry.quality.temperature, "good");
   assert.equal(telemetry.raw.pv2, 6066);
   assert.equal(telemetry.source, "esp32-s3-rs485");
   assert.equal(telemetry.status, "running");
@@ -32,12 +34,46 @@ test("parses a valid CAMS MQTT telemetry message", () => {
   });
 });
 
+test("accepts optional device power monitor readings without fabricating missing values", () => {
+  const payload = JSON.parse(validPayload.toString("utf8"));
+  payload.metrics.powerMonitor = {
+    voltageV: 230.4,
+    currentA: 12.5,
+    activePowerW: 2650,
+    powerFactor: 0.92,
+    frequencyHz: 50,
+    apparentPowerVa: 2880,
+    reactivePowerVar: 1120,
+    powerTotalKwh: 1423.7
+  };
+  const telemetry = parseTelemetryMessage("cams/demo/CAMS-01/telemetry", Buffer.from(JSON.stringify(payload)), now);
+  assert.deepEqual(telemetry.metrics.powerMonitor, payload.metrics.powerMonitor);
+
+  const withoutPower = parseTelemetryMessage("cams/demo/CAMS-01/telemetry", validPayload, now);
+  assert.equal(withoutPower.metrics.powerMonitor, undefined);
+});
+
 test("keeps CAMS-01, CAMS-02, and CAMS-03 telemetry identities separate", () => {
   for (const machineId of ["CAMS-01", "CAMS-02", "CAMS-03"]) {
     const telemetry = parseTelemetryMessage(`cams/plant-01/${machineId}/telemetry`, validPayload, now);
     assert.equal(telemetry.series.machineId, machineId);
     assert.equal(telemetry.hierarchy.device, machineId);
   }
+});
+
+test("marks an implausibly low raw flow signal as disconnected", () => {
+  const disconnected = JSON.parse(validPayload.toString("utf8"));
+  disconnected.raw.pv1 = 3;
+  disconnected.metrics.flowLpm = 0.01;
+  disconnected.errors.flow = 0;
+  disconnected.quality.flow = "good";
+  const telemetry = parseTelemetryMessage(
+    "cams/demo/CAMS-01/telemetry",
+    Buffer.from(JSON.stringify(disconnected)),
+    now
+  );
+  assert.equal(telemetry.errors.flow, 1001);
+  assert.equal(telemetry.quality.flow, "bad");
 });
 
 test("rejects malformed topics and out-of-range values", () => {

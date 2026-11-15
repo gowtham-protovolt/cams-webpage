@@ -12,7 +12,8 @@ const previewTicket = {
   area: "",
   machineNo: "",
   category: "Pressure",
-  priority: "High",
+  priority: "Low",
+  alarmPriority: "Warning",
   problem: "Test preview ticket",
   description: "Preview only — this temporary ticket is stored in this browser session and is not sent to the API or database.",
   activeProblems: [],
@@ -91,13 +92,11 @@ export async function loadTicket(id) {
 
 export async function updateTicket(id, patch) {
   if (previewMode && id === previewTicket.id) {
-    if (patch.maintenance === "Closed") return closeTicket(id);
     const changes = Object.entries(patch).map(([field, value]) => `${field}: ${previewTicket[field] || "—"} → ${value || "—"}`);
     Object.assign(previewTicket, patch);
-    if (changes.length) addPreviewActivity(previewTicket, "Ticket updated", changes.join("; "));
+    if (changes.length) addPreviewActivity(previewTicket, patch.category !== undefined ? "Category changed" : "Ticket updated", changes.join("; "));
     return previewTicket;
   }
-  if (patch.maintenance === "Closed") return closeTicket(id);
   const payload = await request(`/api/tickets/${encodeURIComponent(id)}?siteId=${encodeURIComponent(siteId)}`, {
     method: "PATCH",
     body: JSON.stringify(patch)
@@ -115,7 +114,7 @@ export async function closeTicket(id) {
   if (previewMode && id === previewTicket.id) {
     previewTicket.ticketStatus = "Closed";
     previewTicket.machineStatus = "Resolved";
-    previewTicket.maintenance = "Closed";
+    previewTicket.maintenance = "Completed";
     addPreviewActivity(previewTicket, "Ticket closed", "Ticket closed after the preview machine problem cleared.");
     return previewTicket;
   }

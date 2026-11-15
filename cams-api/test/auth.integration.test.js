@@ -6,7 +6,7 @@ import { hashPassword } from "../src/auth/password.js";
 import { closeDatabase, connectDatabase } from "../src/db.js";
 import { loadConfig } from "../src/config.js";
 
-const hasDatabase = Boolean(process.env.MONGODB_URI);
+const hasDatabase = Boolean(process.env.MONGODB_URI || (process.env.MONGODB_APP_USERNAME && process.env.MONGODB_APP_PASSWORD));
 
 test("rejects invalid credentials and manages a real MongoDB session", { skip: !hasDatabase }, async () => {
   const baseConfig = loadConfig();
@@ -58,6 +58,47 @@ test("rejects invalid credentials and manages a real MongoDB session", { skip: !
     const me = await fetch(`${baseUrl}/api/auth/me`, { headers: { Origin: config.allowedOrigins[0], Cookie: cookieHeader } });
     assert.equal(me.status, 200);
     assert.equal((await me.json()).user.role, "owner");
+
+    const bearerLogin = await fetch(`${baseUrl}/api/auth/login`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        identity: "owner",
+        password: "temporary-integration-password",
+        remember: false,
+        sessionType: "bearer"
+      })
+    });
+    assert.equal(bearerLogin.status, 200);
+    const bearerBody = await bearerLogin.json();
+    assert.equal(bearerBody.sessionType, "bearer");
+    assert.equal(typeof bearerBody.token, "string");
+    assert.ok(bearerBody.token.length > 0);
+    assert.equal(bearerLogin.headers.get("set-cookie"), null);
+
+    const bearerMe = await fetch(`${baseUrl}/api/auth/me`, {
+      headers: {
+        Origin: config.allowedOrigins[0],
+        Authorization: `Bearer ${bearerBody.token}`
+      }
+    });
+    assert.equal(bearerMe.status, 200);
+    assert.equal((await bearerMe.json()).user.role, "owner");
+
+    const bearerLogout = await fetch(`${baseUrl}/api/auth/logout`, {
+      method: "POST",
+      headers: { ...headers, Authorization: `Bearer ${bearerBody.token}` },
+      body: "{}"
+    });
+    assert.equal(bearerLogout.status, 204);
+
+    const afterBearerLogout = await fetch(`${baseUrl}/api/auth/me`, {
+      headers: {
+        Origin: config.allowedOrigins[0],
+        Authorization: `Bearer ${bearerBody.token}`
+      }
+    });
+    assert.equal(afterBearerLogout.status, 401);
 
     const forgot = await fetch(`${baseUrl}/api/auth/forgot-password`, {
       method: "POST",

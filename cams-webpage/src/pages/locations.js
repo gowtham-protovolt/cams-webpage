@@ -1,12 +1,24 @@
-import { escapeHtml as esc } from "./shared.js";
+import { customSelect, escapeHtml as esc } from "./shared.js";
+
+function locationSelectField(id, name, label, options, selected, placeholder) {
+  const selectOptions = [["", placeholder], ...options.map(option => [String(option.id), option.name])];
+  const select = customSelect(id, selectOptions, String(selected), {
+    className: "location-select",
+    label,
+    ariaLabel: label,
+    nativeData: `name="${name}" required`
+  });
+  return `<label><span>${label}</span>${select}</label>`;
+}
 
 export function locationSelects(state, device = {}) {
   const clusters = state.locations || [];
   const selected = device.clusterId || clusters.find(c => c.name === device.cluster)?.id || "";
   const cluster = clusters.find(c => c.id === selected);
   const areaId = device.areaId || cluster?.areas.find(a => a.name === device.zone)?.id || "";
-  return `<label><span>Cluster</span><select class="location-select" name="clusterId" required><option value="">Select cluster</option>${clusters.map(c => `<option value="${esc(c.id)}" ${c.id === selected ? "selected" : ""}>${esc(c.name)}</option>`).join("")}</select></label>
-    <label><span>Area</span><select class="location-select" name="areaId" required><option value="">Select area</option>${(cluster?.areas || []).map(a => `<option value="${esc(a.id)}" ${a.id === areaId ? "selected" : ""}>${esc(a.name)}</option>`).join("")}</select></label>`;
+  const suffix = device.id || "assignment";
+  return `${locationSelectField(`location-cluster-${suffix}`, "clusterId", "Cluster", clusters, selected, "Select cluster")}
+    ${locationSelectField(`location-area-${suffix}`, "areaId", "Area", cluster?.areas || [], areaId, "Select area")}`;
 }
 
 export function renderLocationManager(state, devices) {
@@ -40,7 +52,7 @@ export function bindLocations({ state, api, devices, render, refresh, toast }) {
   document.querySelectorAll('select[name="clusterId"]').forEach(select => select.addEventListener("change", () => {
     const area = select.closest("form").querySelector('select[name="areaId"]');
     const cluster = (state.locations || []).find(c => c.id === select.value);
-    area.innerHTML = `<option value="">Select area</option>${(cluster?.areas || []).map(a => `<option value="${esc(a.id)}">${esc(a.name)}</option>`).join("")}`;
+    area.closest("label").outerHTML = locationSelectField(area.id, "areaId", "Area", cluster?.areas || [], "", "Select area");
   }));
   const mutate = async (path, method, body) => {
     state.locationError = "";

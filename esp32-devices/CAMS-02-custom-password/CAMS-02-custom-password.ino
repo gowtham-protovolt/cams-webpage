@@ -34,10 +34,10 @@ const char* WIFI_PASS = "YOUR_WIFI_PASS";
 #define PRESSURE_SPAN_RAW  5569.0f
 
 // ================= MQTT (CAMS Docker) =================
-const char* MQTT_HOST = "192.168.0.184";                 // Docker host (Mac) LAN IP
-const int   MQTT_PORT = 1884;                            // host port mapped to container 1883
+const char* MQTT_HOST = "192.168.0.128";                 // CAMS office server LAN IP
+const int   MQTT_PORT = 1884;                            // protected-LAN host port mapped to broker 1883
 const char* MQTT_USER = MACHINE_ID;                      // username = machine ID (broker ACL %u)
-#define MQTT_PASS_OVERRIDE ""   // Keep empty in Git; inject the device credential locally before flashing.
+#define MQTT_PASS_OVERRIDE "9def3234d4e8551f7bf22cb008e038dd"   // normal ah kaali ah vidunga. devices.txt la custom password irundha mattum fill pannunga
 char        MQTT_PASS[40];                               // auto: "cam0" + last 2 digits of MACHINE_ID (CAMS-05 -> cam005)
 const char* MQTT_CLIENT_ID = "cams-esp32-" MACHINE_ID;   // unique per device
 
@@ -79,6 +79,11 @@ PubSubClient mqtt(wifiClient);
 #define IDX_FLOW      0
 #define IDX_PRESSURE  1
 #define IDX_SUCTION   2
+
+#define FLOW_SIGNAL_RAW_MIN      1000
+#define PRESSURE_SIGNAL_RAW_MIN  1000
+#define SUCTION_SIGNAL_RAW_MIN   3000
+#define SENSOR_DISCONNECTED_ERR  1001
 
 uint32_t lastPublish = 0;
 uint32_t lastMqttTry = 0;
@@ -208,21 +213,27 @@ void publishTelemetry(const int32_t pv[3], float flowLMin, float pressureBar, fl
   gmtime_r(&now, &tmv);
   strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%SZ", &tmv);
 
-  bool flowBad = false, pressBad = false, sucBad = false;
+  bool flowBad = pv[IDX_FLOW] < FLOW_SIGNAL_RAW_MIN;
+  bool pressBad = pv[IDX_PRESSURE] < PRESSURE_SIGNAL_RAW_MIN;
+  bool sucBad = pv[IDX_SUCTION] < SUCTION_SIGNAL_RAW_MIN;
   float flow  = clampf(flowLMin,    -500.0f, 500.0f, flowBad);   // API: flowLpm  -500..500
   float press = clampf(pressureBar, -1.5f,   20.0f,  pressBad);  // API: pressureBar -1.5..20
   float suc   = clampf(suctionKPa,  -150.0f, 150.0f, sucBad);    // API: suctionKpa -150..150
 
-  char payload[420];
+  char payload[520];
   int len = snprintf(payload, sizeof(payload),
     "{\"sequence\":%lu,\"timestamp\":\"%s\",\"status\":\"running\","
     "\"source\":\"esp32-s3-rs485\","
     "\"metrics\":{\"pressureBar\":%.2f,\"flowLpm\":%.2f,\"suctionKpa\":%.2f},"
     "\"raw\":{\"pv1\":%ld,\"pv2\":%ld,\"pv3\":%ld},"
+    "\"errors\":{\"flow\":%u,\"pressure\":%u,\"suction\":%u},"
     "\"quality\":{\"flow\":\"%s\",\"suction\":\"%s\",\"pressure\":\"%s\",\"modbus\":\"good\"}}",
     (unsigned long)seq, ts,
     press, flow, suc,
     (long)pv[IDX_FLOW], (long)pv[IDX_PRESSURE], (long)pv[IDX_SUCTION],
+    flowBad ? SENSOR_DISCONNECTED_ERR : 0,
+    pressBad ? SENSOR_DISCONNECTED_ERR : 0,
+    sucBad ? SENSOR_DISCONNECTED_ERR : 0,
     flowBad ? "bad" : "good", sucBad ? "bad" : "good", pressBad ? "bad" : "good");
 
   if (len <= 0 || len >= (int)sizeof(payload)) {
@@ -257,7 +268,7 @@ void setup() {
 
   mqtt.setServer(MQTT_HOST, MQTT_PORT);
   mqtt.setKeepAlive(30);
-  mqtt.setBufferSize(512);   // default 256 podhaadhu, payload ~330 bytes
+  mqtt.setBufferSize(768);   // diagnostics included; default 256 is not enough
 
   delay(500);
   Serial.println("Selec PLC Modbus RTU reader + MQTT started");

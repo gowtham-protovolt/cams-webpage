@@ -13,6 +13,7 @@ import { usersRouter } from "./routes/users.js";
 import { settingsRouter } from "./routes/settings.js";
 import { ticketsRouter } from "./routes/tickets.js";
 import { locationsRouter } from "./routes/locations.js";
+import { deviceConfigurationRouter } from "./routes/device-configuration.js";
 
 import { maintenanceRouter } from "./routes/maintenance.js";
 
@@ -65,6 +66,7 @@ export function createApp(config) {
   app.use("/api/admin", usersRouter());
   app.use("/api", settingsRouter(config));
   app.use("/api", ticketsRouter());
+  app.use("/api", deviceConfigurationRouter(config));
   app.use("/api", telemetryRouter(config));
   app.use("/api", locationsRouter());
   app.use("/api", maintenanceRouter());

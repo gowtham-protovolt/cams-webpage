@@ -7,7 +7,7 @@ import { buildTelemetryTree } from "../telemetry/tree.js";
 import { evaluateMachine } from "../monitoring/health.js";
 import { publicAlarm, publicAuditEntry, recordAlarmAudit } from "../telemetry/alarms.js";
 import { getSiteSettings } from "../settings/service.js";
-import { reconcileMachineTickets, recordMachineTicketActivity } from "../tickets/service.js";
+import { listTickets, reconcileMachineTickets, recordMachineTicketActivity } from "../tickets/service.js";
 import { assignDeviceLocations, buildClusterHierarchy } from "../telemetry/hierarchy.js";
 import { ensureLegacyLocations, resolveLocation } from "../telemetry/locations.js";
 
@@ -71,15 +71,20 @@ async function activeMachineViews(config, siteId) {
   const latestByMachine = new Map(latest.map(item => [`${item.siteId}/${item.machineId}`, item]));
   const statusByMachine = new Map(deviceStatuses.map(item => [`${item.siteId}/${item.machineId}`, item]));
   const siteSettings = new Map();
-  for (const machineSiteId of new Set(machines.map(machine => machine.siteId))) {
+  await Promise.all([...new Set(machines.map(machine => machine.siteId))].map(async machineSiteId => {
     siteSettings.set(machineSiteId, await getSiteSettings(config, machineSiteId));
-  }
+  }));
   const views = machines.map(machine => {
     const key = `${machine.siteId}/${machine.machineId}`;
     const telemetry = latestByMachine.get(key) || null;
     const monitoring = evaluateMachine(telemetry, statusByMachine.get(key), {
       staleAfterSeconds: siteSettings.get(machine.siteId).sampling.staleAfterSeconds,
-      thresholds: siteSettings.get(machine.siteId).thresholds
+      thresholds: {
+        ...siteSettings.get(machine.siteId).thresholds,
+        ...(machine.configuration?.sensors?.powerMonitor
+          ? { powerMonitor: machine.configuration.sensors.powerMonitor }
+          : {})
+      }
     });
     return {
       id: machine.machineId,
@@ -121,6 +126,26 @@ export function telemetryRouter(config) {
   router.get("/machines", async (_request, response, next) => {
     try {
       response.json({ machines: await activeMachineViews(config) });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get("/dashboard/summary", async (request, response, next) => {
+    try {
+      const siteId = String(request.query.siteId || "plant-01");
+      if (!MACHINE_ID.test(siteId)) return response.status(400).json({ error: "Invalid site identifier." });
+      const db = getDatabase();
+      const [machines, alarms, tickets] = await Promise.all([
+        activeMachineViews(config),
+        db.collection("alarms")
+          .find({ siteId, status: { $in: ["Active", "Acknowledged"] } })
+          .sort({ lastSeenAt: -1 })
+          .limit(500)
+          .toArray(),
+        listTickets(siteId)
+      ]);
+      response.json({ machines, alarms: alarms.map(publicAlarm), tickets });
     } catch (error) {
       next(error);
     }
@@ -218,9 +243,23 @@ export function telemetryRouter(config) {
       const existing = await getDatabase().collection("machines").findOne({ siteId, machineId, active: true });
       if (!existing) return response.status(404).json({ error: "Active device not found." });
       const location = await resolveLocation(siteId, request.body, existing);
+      const updates = { ...fields, ...location, updatedAt: new Date(), updatedBy: request.auth.user.id };
+      if (existing.configuration) {
+        const cluster = location.cluster ?? existing.cluster ?? "";
+        const zone = location.zone ?? existing.zone ?? "";
+        updates.configuration = {
+          ...existing.configuration,
+          general: {
+            ...existing.configuration.general,
+            deviceName: fields.name,
+            machineId,
+            location: [cluster, zone].filter(Boolean).join(" · ") || "Unassigned"
+          }
+        };
+      }
       const machine = await getDatabase().collection("machines").findOneAndUpdate(
         { siteId, machineId, active: true },
-        { $set: { ...fields, ...location, updatedAt: new Date(), updatedBy: request.auth.user.id } },
+        { $set: updates },
         { returnDocument: "after" }
       );
       if (!machine) return response.status(404).json({ error: "Active machine not found." });
@@ -294,6 +333,31 @@ export function telemetryRouter(config) {
     }
   });
 
+  router.delete("/machines/:machineId/permanent", requireOwner, async (request, response, next) => {
+    try {
+      const machineId = String(request.params.machineId).toUpperCase();
+      const siteId = String(request.query.siteId || "plant-01");
+      if (!DEVICE_MACHINE_ID.test(machineId) || !MACHINE_ID.test(siteId)) return response.status(400).json({ error: "Invalid machine identifier." });
+      const db = getDatabase();
+      const machine = await db.collection("machines").findOneAndDelete({
+        siteId,
+        machineId,
+        active: false,
+        removedAt: { $exists: true }
+      });
+      if (!machine) return response.status(404).json({ error: "Removed machine not found." });
+      await Promise.all([
+        db.collection("latestTelemetry").deleteOne({ siteId, machineId }),
+        db.collection("deviceStatus").deleteOne({ siteId, machineId }),
+        db.collection("ticketMachineState").deleteOne({ _id: `${siteId}/${machineId}` })
+      ]);
+      telemetryEvents.emit("machine-permanently-deleted", { id: machineId, siteId });
+      response.json({ deleted: true, machine: { id: machineId, siteId } });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   router.get("/machines/:machineId/telemetry", async (request, response, next) => {
     try {
       const machineId = request.params.machineId;
@@ -303,12 +367,18 @@ export function telemetryRouter(config) {
       const from = request.query.from ? new Date(String(request.query.from)) : new Date(Date.now() - 60 * 60 * 1000);
       const to = request.query.to ? new Date(String(request.query.to)) : new Date();
       if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime()) || from > to) return response.status(400).json({ error: "Invalid telemetry time range." });
-      const readings = await getDatabase().collection("telemetry").find({
-        "series.siteId": siteId,
-        "series.machineId": machineId,
-        observedAt: { $gte: from, $lte: to }
-      }).sort({ observedAt: -1 }).limit(limit).toArray();
-      response.json({ readings: readings.reverse() });
+      const readings = await getDatabase().collection("telemetry").aggregate([
+        {
+          $match: {
+            "series.siteId": siteId,
+            "series.machineId": machineId,
+            observedAt: { $gte: from, $lte: to }
+          }
+        },
+        { $sort: { observedAt: 1 } },
+        { $bucketAuto: { groupBy: "$observedAt", buckets: limit, output: { reading: { $last: "$$ROOT" } } } }
+      ]).toArray();
+      response.json({ readings: readings.map(bucket => bucket.reading) });
     } catch (error) {
       next(error);
     }
@@ -349,7 +419,7 @@ export function telemetryRouter(config) {
     const sendStatus = data => response.write(`event: machine-status\ndata: ${JSON.stringify(data)}\n\n`);
     const sendAlarm = data => response.write(`event: alarm\ndata: ${JSON.stringify(data)}\n\n`);
     const sendTicket = data => response.write(`event: ticket\ndata: ${JSON.stringify(data)}\n\n`);
-    const machineEventNames = ["machine-created", "machine-updated", "machine-removed", "machine-restored"];
+    const machineEventNames = ["machine-created", "machine-updated", "machine-removed", "machine-restored", "machine-permanently-deleted"];
     const machineListeners = new Map(machineEventNames.map(name => [name, data => response.write(`event: ${name}\ndata: ${JSON.stringify(data)}\n\n`)]));
     const heartbeat = setInterval(() => response.write(": heartbeat\n\n"), 20000);
     telemetryEvents.on("telemetry", sendTelemetry);

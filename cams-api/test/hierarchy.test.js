@@ -21,8 +21,8 @@ test("buildClusterHierarchy groups, sorts and counts devices", () => {
 test("assignDeviceLocations gives legacy devices the default four-cluster layout", () => {
   const devices = Array.from({ length: 18 }, (_, index) => ({ id: `CAMS-${String(index + 1).padStart(2, "0")}` }));
   const assigned = assignDeviceLocations(devices);
-  assert.deepEqual([assigned[0].cluster, assigned[0].zone], ["Cluster 01", "Area 01"]);
-  assert.deepEqual([assigned[4].cluster, assigned[4].zone], ["Cluster 01", "Area 03"]);
-  assert.deepEqual([assigned[5].cluster, assigned[5].zone], ["Cluster 02", "Area 01"]);
-  assert.deepEqual([assigned[17].cluster, assigned[17].zone], ["Cluster 04", "Area 02"]);
+  assert.deepEqual([assigned[0].cluster, assigned[0].zone], ["C1", "Area 01"]);
+  assert.deepEqual([assigned[4].cluster, assigned[4].zone], ["C1", "Area 03"]);
+  assert.deepEqual([assigned[5].cluster, assigned[5].zone], ["C2", "Area 01"]);
+  assert.deepEqual([assigned[17].cluster, assigned[17].zone], ["C4", "Area 02"]);
 });

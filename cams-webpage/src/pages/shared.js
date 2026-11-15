@@ -11,7 +11,9 @@ const iconPaths = {
   bell: '<path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/>',
   menu: '<path d="M4 6h16M4 12h16M4 18h16"/>',
   chevronDown: '<path d="m6 9 6 6 6-6"/>', chevronRight: '<path d="m9 18 6-6-6-6"/>', arrowLeft: '<path d="m15 18-6-6 6-6"/>',
+  close: '<path d="m18 6-12 12M6 6l12 12"/>',
   refresh: '<path d="M20 11a8 8 0 1 0-2.3 5.7L20 14"/><path d="M20 6v5h-5"/>',
+  trash: '<path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v5M14 11v5"/>',
   download: '<path d="M12 3v12M7 10l5 5 5-5M5 21h14"/>', search: '<circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/>',
   lock: '<rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/>',
   user: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
@@ -162,9 +164,7 @@ export function deviceDisplayName(machine = {}) {
 }
 
 export function deviceLabel(machine = {}) {
-  const id = String(machine.id || machine.machineId || "").trim();
-  const name = deviceDisplayName(machine);
-  return id && name && name !== id ? `${name} (${id})` : name || id;
+  return deviceDisplayName(machine);
 }
 
 export function relativeTime(value) {
@@ -188,12 +188,22 @@ export function pageHead(title, subtitle, actions = "") {
 export const parameterConfig = {
   Pressure: { field: "pressureBar", unit: "bar", fallbackSpan: 1.2 },
   Flow: { field: "flowLpm", unit: "L/min", fallbackSpan: 10 },
-  Suction: { field: "suctionKpa", unit: "kPa", fallbackSpan: 1.2 }
+  Suction: { field: "suctionKpa", unit: "kPa", fallbackSpan: 1.2 },
+  Temperature: { field: "temperatureC", unit: "°C", fallbackSpan: 20 }
+};
+
+export const parameterQualityField = {
+  Pressure: "pressure",
+  Flow: "flow",
+  Suction: "suction",
+  Temperature: "temperature"
 };
 
 export function historyFor(machineHistory, machineId, parameter) {
   const config = parameterConfig[parameter] || parameterConfig.Pressure;
+  const qualityField = parameterQualityField[parameter] || "pressure";
   return (machineHistory.get(machineId) || [])
+    .filter(reading => reading.quality?.[qualityField] !== "bad")
     .map(reading => ({ value: Number(reading.metrics?.[config.field]), observedAt: reading.observedAt }))
     .filter(point => Number.isFinite(point.value));
 }
@@ -229,10 +239,8 @@ export function chartSvg(parameter = "Pressure", readings = []) {
 }
 
 export function kpi(label, value, note, iconName, tone, options = {}) {
-  const interactive = options.filter
-    ? ` role="link" tabindex="0" data-dashboard-kpi="${escapeHtml(options.filter)}" aria-label="Open ${escapeHtml(label.toLowerCase())}"`
-    : "";
-  return `<article class="kpi-card${options.filter ? " is-clickable" : ""}"${interactive}><div class="kpi-top"><span class="kpi-label">${escapeHtml(label)}</span><span class="kpi-icon ${tone}">${icon(iconName)}</span></div><div class="kpi-value"><strong>${value}</strong><span>${escapeHtml(note)}</span></div>${options.filter ? `<span class="kpi-action">${escapeHtml(options.actionLabel || "View devices")} ${icon("chevronRight")}</span>` : ""}</article>`;
+  const actionLabel = options.actionLabel || "View devices";
+  return `<article class="kpi-card${options.filter ? " has-action" : ""}"><div class="kpi-top"><span class="kpi-label">${escapeHtml(label)}</span><span class="kpi-icon ${tone}">${icon(iconName)}</span></div><div class="kpi-value"><strong>${value}</strong><span>${escapeHtml(note)}</span></div>${options.filter ? `<button class="kpi-action" type="button" data-dashboard-kpi="${escapeHtml(options.filter)}" aria-label="${escapeHtml(`${actionLabel}: ${label}`)}">${escapeHtml(actionLabel)} ${icon("chevronRight")}</button>` : ""}</article>`;
 }
 
 export function phasePage(title, tag, headline, description, features) {

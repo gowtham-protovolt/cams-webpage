@@ -1,12 +1,25 @@
-import { customDatePicker, customSelect, deviceLabel, downloadMenu, escapeHtml, historyFor, icon, pageHead, parameterConfig, timeRangeSelect } from "./shared.js";
+import { customDatePicker, customSelect, deviceLabel, downloadMenu, escapeHtml, historyFor, icon, pageHead, parameterConfig, telemetryUpdateTime, timeRangeSelect } from "./shared.js";
 
+const rangeMilliseconds = {
+  "15m": 15 * 60e3,
+  "1h": 60 * 60e3,
+  "6h": 6 * 60 * 60e3,
+  "24h": 24 * 60 * 60e3,
+  "7d": 7 * 24 * 60 * 60e3,
+  "1mo": 30 * 24 * 60 * 60e3,
+  "3mo": 90 * 24 * 60 * 60e3,
+  "6mo": 180 * 24 * 60 * 60e3,
+  "1y": 365 * 24 * 60 * 60e3
+};
+const dayMilliseconds = 24 * 60 * 60e3;
 const operatingRanges = {
   Pressure: { minimum: 6.8, maximum: 7.5 },
   Flow: { minimum: 22, maximum: 28 },
-  Suction: { minimum: 0.6, maximum: 1.8 }
+  Suction: { minimum: 0.6, maximum: 1.8 },
+  Temperature: { minimum: 0, maximum: 80 }
 };
 
-const qualityFields = { Pressure: "pressure", Flow: "flow", Suction: "suction" };
+const qualityFields = { Pressure: "pressure", Flow: "flow", Suction: "suction", Temperature: "temperature" };
 
 function smoothPath(points) {
   if (!points.length) return "";
@@ -31,10 +44,23 @@ function readingValue(value, digits = 2) {
   return Number.isFinite(number) ? number.toFixed(digits) : "—";
 }
 
-export function connectedProcessChart(machine, readings, parameter) {
+export function trendTimeBounds(range, customDate = "", now = Date.now()) {
+  const end = Number(now);
+  if (range === "custom" && customDate) {
+    const start = new Date(`${customDate}T00:00:00`).getTime();
+    if (Number.isFinite(start)) return { from: Math.min(start, end), to: Math.min(start + dayMilliseconds - 1, end) };
+  }
+  const duration = rangeMilliseconds[range] || rangeMilliseconds["1h"];
+  return { from: end - duration, to: end };
+}
+
+export function connectedProcessChart(machine, readings, parameter, bounds = null) {
   const config = parameterConfig[parameter] || parameterConfig.Pressure;
   const range = operatingRanges[parameter] || operatingRanges.Pressure;
-  const normalizedSamples = readings
+  const qualityField = qualityFields[parameter] || "pressure";
+  const signalDisconnected = machine.quality?.[qualityField] === "bad";
+  const normalizedSamples = (signalDisconnected ? [] : readings)
+    .filter(reading => reading.quality?.[qualityField] !== "bad")
     .map(reading => ({ reading, value: Number(reading.metrics?.[config.field]), time: new Date(reading.observedAt) }))
     .filter(sample => Number.isFinite(sample.value) && !Number.isNaN(sample.time.getTime()));
 
@@ -44,7 +70,7 @@ export function connectedProcessChart(machine, readings, parameter) {
   });
 
   if (!samples.length) {
-    return `<div class="process-chart-empty">${icon("pulse")}<strong>Waiting for live telemetry history</strong><span>The connected trace will begin when the ESP32 publishes readings.</span></div>`;
+    return `<div class="process-chart-empty">${icon("pulse")}<strong>${signalDisconnected ? `${escapeHtml(parameter)} sensor has no valid signal` : "Waiting for live telemetry history"}</strong><span>${signalDisconnected ? "Graph and statistics are paused until a valid sensor signal is restored." : "The connected trace will begin when the ESP32 publishes readings."}</span></div>`;
   }
 
   const width = 920;
@@ -52,13 +78,19 @@ export function connectedProcessChart(machine, readings, parameter) {
   const plot = { left: 62, right: 22, top: 24, bottom: 48 };
   const plotWidth = width - plot.left - plot.right;
   const plotHeight = height - plot.top - plot.bottom;
+  const readingTimes = samples.map(sample => sample.time.getTime());
+  const axisFrom = bounds?.from ?? Math.min(...readingTimes);
+  const axisTo = bounds?.to ?? Math.max(...readingTimes);
+  const axisSpan = Math.max(1, axisTo - axisFrom);
   const values = samples.map(sample => sample.value);
   const domainMinimum = Math.min(...values, range.minimum);
   const domainMaximum = Math.max(...values, range.maximum);
   const span = Math.max(domainMaximum - domainMinimum, config.fallbackSpan);
   const minimum = domainMinimum - span * 0.16;
   const maximum = domainMaximum + span * 0.16;
-  const x = index => samples.length === 1 ? plot.left + plotWidth / 2 : plot.left + (index / (samples.length - 1)) * plotWidth;
+  const x = index => bounds || samples.length > 1
+    ? plot.left + Math.max(0, Math.min(1, (samples[index].time.getTime() - axisFrom) / axisSpan)) * plotWidth
+    : plot.left + plotWidth / 2;
   const y = value => plot.top + ((maximum - value) / (maximum - minimum)) * plotHeight;
   const points = samples.map((sample, index) => ({ x: Number(x(index).toFixed(2)), y: Number(y(sample.value).toFixed(2)) }));
   const linePath = smoothPath(points);
@@ -73,8 +105,14 @@ export function connectedProcessChart(machine, readings, parameter) {
     return `<line class="process-grid-line" x1="${plot.left}" y1="${gridY}" x2="${width - plot.right}" y2="${gridY}"/><text class="process-axis-label" x="${plot.left - 12}" y="${gridY + 4}" text-anchor="end">${label.toFixed(Math.abs(label) < 10 ? 1 : 0)}</text>`;
   }).join("");
 
-  const labelIndexes = [...new Set([0, .25, .5, .75, 1].map(ratio => Math.round((samples.length - 1) * ratio)))];
-  const timeLabels = labelIndexes.map(index => `<text class="process-axis-label" x="${x(index)}" y="${height - 14}" text-anchor="${index === 0 ? "start" : index === samples.length - 1 ? "end" : "middle"}">${samples[index].time.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}</text>`).join("");
+  const timeLabels = [0, .25, .5, .75, 1].map((ratio, index, labels) => {
+    const time = new Date(axisFrom + axisSpan * ratio);
+    const label = axisSpan > dayMilliseconds
+      ? time.toLocaleDateString("en-IN", { day: "2-digit", month: "short" })
+      : time.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" });
+    const labelX = plot.left + plotWidth * ratio;
+    return `<text class="process-axis-label" x="${labelX}" y="${height - 14}" text-anchor="${index === 0 ? "start" : index === labels.length - 1 ? "end" : "middle"}">${label}</text>`;
+  }).join("");
 
   const nodeInterval = Math.max(1, Math.ceil(samples.length / 48));
   const nodes = samples.map((sample, index) => {
@@ -105,7 +143,7 @@ export function connectedProcessChart(machine, readings, parameter) {
       <div class="process-tooltip" id="process-tooltip" role="status" aria-live="polite">
         <div class="process-tooltip-time" data-tooltip-time>—</div>
         <strong>${escapeHtml(deviceLabel(machine))}</strong>
-        <dl><div><dt>Pressure</dt><dd><span data-tooltip-pressure>—</span> bar</dd></div><div><dt>Flow</dt><dd><span data-tooltip-flow>—</span> L/min</dd></div><div><dt>Suction</dt><dd><span data-tooltip-suction>—</span> kPa</dd></div></dl>
+        <dl><div><dt>Flow</dt><dd><span data-tooltip-flow>—</span> L/min</dd></div><div><dt>Pressure</dt><dd><span data-tooltip-pressure>—</span> bar</dd></div><div><dt>Suction</dt><dd><span data-tooltip-suction>—</span> kPa</dd></div></dl>
         <div class="process-tooltip-meta"><span data-tooltip-status>—</span><span data-tooltip-quality>—</span></div>
       </div>
     </div>
@@ -119,21 +157,31 @@ export function trendStat(label, value, unit) {
 export function renderTrendsPage({ state, machines, machineHistory }) {
   const machine = machines.find(item => item.id === state.trendMachine) || machines[0];
   if (!machine) return `${pageHead("Trends & analytics", "No device telemetry is available")}<div class="empty-state">${icon("trend")}Publish telemetry to begin charting.</div>`;
-  const history = historyFor(machineHistory, machine.id, state.trendParameter);
+  const qualityField = qualityFields[state.trendParameter] || "pressure";
+  const bounds = trendTimeBounds(state.trendRange, state.trendCustomDate);
+  const rawReadings = (machineHistory.get(machine.id) || []).filter(reading => {
+    const observedAt = new Date(reading.observedAt).getTime();
+    return observedAt >= bounds.from && observedAt <= bounds.to;
+  });
+  const historyMap = new Map([[machine.id, rawReadings]]);
+  const history = machine.quality?.[qualityField] === "bad" ? [] : historyFor(historyMap, machine.id, state.trendParameter);
   const values = history.map(point => point.value);
   const current = values.at(-1) ?? null;
   const minimum = values.length ? Math.min(...values) : null;
   const maximum = values.length ? Math.max(...values) : null;
   const average = values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
   const unit = (parameterConfig[state.trendParameter] || parameterConfig.Pressure).unit;
-  const rawReadings = machineHistory.get(machine.id) || [];
+  const latestReading = rawReadings.at(-1);
+  const latestReadingLabel = latestReading
+    ? `Latest reading · ${telemetryUpdateTime(latestReading.receivedAt || latestReading.observedAt)}`
+    : "No readings in selected range";
   const selects = machines.map(item => [item.id, deviceLabel(item)]);
-  const parameters = ["Pressure", "Flow", "Suction"].map(parameter => [parameter, parameter]);
-  const ranges = [["15m", "15 min"], ["1h", "1 hr"], ["6h", "6 hr"], ["24h", "1 day"], ["7d", "1 week"], ["1mo", "1 month"], ["3mo", "3 months"], ["6mo", "6 months"], ["1y", "1 year"], ["custom", "Custom"]];
+  const parameters = ["Flow", "Pressure", "Suction", "Temperature"].map(parameter => [parameter, parameter]);
+  const ranges = [["15m", "15 Min"], ["1h", "1 Hr"], ["6h", "6 Hr"], ["24h", "1 Day"], ["7d", "1 Week"], ["1mo", "1 Month"], ["3mo", "3 Months"], ["6mo", "6 Months"], ["1y", "1 Year"], ["custom", "Custom"]];
   const customDate = state.trendRange === "custom" ? customDatePicker(state, "trend-custom-date", state.trendCustomDate, "Choose trend date") : "";
   return `${pageHead("Trends & analytics", "Explore live and historical operating parameters", downloadMenu([{ id: "export-trend-pdf", label: "PDF", format: "pdf" }, { id: "export-trend-xlsx", label: "Excel", format: "xlsx" }]))}
     <section class="trend-controls"><div class="control-group grow"><label for="trend-machine-trigger">Device</label>${customSelect("trend-machine", selects, state.trendMachine, { label: "Device" })}</div><div class="control-group"><label for="trend-parameter-trigger">Parameter</label>${customSelect("trend-parameter", parameters, state.trendParameter, { label: "Parameter" })}</div><div class="control-group grow"><label for="trend-range-trigger">Time range</label>${timeRangeSelect("trend-range", ranges, state.trendRange)}${customDate}</div></section>
-    <article class="panel"><header class="panel-head"><div class="panel-title"><h2>${state.trendParameter} history</h2><p>${escapeHtml(deviceLabel(machine))} · ${state.trendRange === "Custom" ? "custom range preview" : `last ${state.trendRange}`}</p></div><span class="updated-note"><i class="pulse-dot"></i>Live sampling</span></header>
-      <div class="panel-body process-panel-body">${connectedProcessChart(machine, rawReadings, state.trendParameter)}</div><div class="trend-stat-grid">${trendStat("Current", current, unit)}${trendStat("Minimum", minimum, unit)}${trendStat("Maximum", maximum, unit)}${trendStat("Average", average, unit)}</div>
+    <article class="panel"><header class="panel-head"><div class="panel-title"><h2>${state.trendParameter} history</h2><p>${escapeHtml(deviceLabel(machine))} · ${state.trendRange === "custom" ? "custom range" : `last ${state.trendRange}`}</p></div><span class="updated-note"><i class="pulse-dot"></i>${escapeHtml(latestReadingLabel)}</span></header>
+      <div class="panel-body process-panel-body">${connectedProcessChart(machine, rawReadings, state.trendParameter, bounds)}</div><div class="trend-stat-grid">${trendStat("Current", current, unit)}${trendStat("Minimum", minimum, unit)}${trendStat("Maximum", maximum, unit)}${trendStat("Average", average, unit)}</div>
     </article>`;
 }

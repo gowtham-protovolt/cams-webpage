@@ -5,7 +5,7 @@ import { loadConfig } from "../src/config.js";
 import { parseTelemetryMessage } from "../src/telemetry/schema.js";
 import { ingestTelemetry } from "../src/telemetry/store.js";
 
-const hasDatabase = Boolean(process.env.MONGODB_URI);
+const hasDatabase = Boolean(process.env.MONGODB_URI || (process.env.MONGODB_APP_USERNAME && process.env.MONGODB_APP_PASSWORD));
 
 test("stores telemetry, updates latest data, and rejects a duplicate sequence", { skip: !hasDatabase }, async () => {
   const baseConfig = loadConfig();

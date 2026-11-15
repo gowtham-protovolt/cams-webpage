@@ -13,6 +13,14 @@ const machineColumns = [
   { key: "pressureBar", label: "Pressure (bar)", width: 16 },
   { key: "flowLpm", label: "Flow (L/min)", width: 16 },
   { key: "suctionKpa", label: "Suction (kPa)", width: 16 },
+  { key: "voltageV", label: "Voltage (V)", width: 14 },
+  { key: "currentA", label: "Current (A)", width: 14 },
+  { key: "activePowerW", label: "Active power (W)", width: 18 },
+  { key: "powerFactor", label: "Power factor", width: 14 },
+  { key: "frequencyHz", label: "Frequency (Hz)", width: 16 },
+  { key: "apparentPowerVa", label: "Apparent power (VA)", width: 20 },
+  { key: "reactivePowerVar", label: "Reactive power (var)", width: 20 },
+  { key: "powerTotalKwh", label: "Power total (kWh)", width: 18 },
   { key: "receivedAt", label: "Last received", width: 24 }
 ];
 
@@ -48,6 +56,31 @@ function iso(value) {
   return value ? new Date(value).toISOString() : "";
 }
 
+export function telemetryExportRow(reading) {
+  return {
+    observedAt: iso(reading.observedAt),
+    sequence: reading.sequence,
+    status: reading.status,
+    pressureBar: reading.metrics.pressureBar,
+    flowLpm: reading.metrics.flowLpm,
+    suctionKpa: reading.metrics.suctionKpa,
+    voltageV: reading.metrics.powerMonitor?.voltageV ?? "",
+    currentA: reading.metrics.powerMonitor?.currentA ?? "",
+    activePowerW: reading.metrics.powerMonitor?.activePowerW ?? "",
+    powerFactor: reading.metrics.powerMonitor?.powerFactor ?? "",
+    frequencyHz: reading.metrics.powerMonitor?.frequencyHz ?? "",
+    apparentPowerVa: reading.metrics.powerMonitor?.apparentPowerVa ?? "",
+    reactivePowerVar: reading.metrics.powerMonitor?.reactivePowerVar ?? "",
+    powerTotalKwh: reading.metrics.powerMonitor?.powerTotalKwh ?? "",
+    pv1: reading.raw?.pv1 ?? "",
+    pv2: reading.raw?.pv2 ?? "",
+    pv3: reading.raw?.pv3 ?? "",
+    err1: reading.errors?.flow ?? "",
+    err2: reading.errors?.pressure ?? "",
+    err3: reading.errors?.suction ?? ""
+  };
+}
+
 function documentResponse(response, format, filename, buffer) {
   const contentType = format === "xlsx"
     ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -73,7 +106,7 @@ export function exportsRouter() {
   router.get("/exports/machines/:format", async (request, response, next) => {
     try {
       const format = request.params.format;
-      if (format !== "xlsx") return response.status(404).json({ error: "Unsupported export format." });
+      if (!["xlsx", "pdf"].includes(format)) return response.status(404).json({ error: "Unsupported export format." });
       const db = getDatabase();
       const [machines, latest] = await Promise.all([
         db.collection("machines").find({ active: true }).sort({ siteId: 1, machineId: 1 }).toArray(),
@@ -120,21 +153,9 @@ export function exportsRouter() {
         "series.siteId": siteId,
         "series.machineId": machineId,
         observedAt: { $gte: from, $lte: to }
-      }).sort({ observedAt: 1 }).limit(5000).toArray();
-      const rows = readings.map(reading => ({
-        observedAt: iso(reading.observedAt),
-        sequence: reading.sequence,
-        status: reading.status,
-        pressureBar: reading.metrics.pressureBar,
-        flowLpm: reading.metrics.flowLpm,
-        suctionKpa: reading.metrics.suctionKpa,
-        pv1: reading.raw?.pv1 ?? "",
-        pv2: reading.raw?.pv2 ?? "",
-        pv3: reading.raw?.pv3 ?? "",
-        err1: reading.errors?.flow ?? "",
-        err2: reading.errors?.suction ?? "",
-        err3: reading.errors?.pressure ?? ""
-      }));
+      }).project({ observedAt: 1, sequence: 1, status: 1, metrics: 1, raw: 1, errors: 1 })
+        .sort({ observedAt: 1 }).limit(5000).toArray();
+      const rows = readings.map(telemetryExportRow);
       const buffer = await buildDocument(format, {
         sheetName: machineId,
         title: `CAMS Telemetry · ${machineId}`,

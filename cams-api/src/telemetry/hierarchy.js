@@ -39,7 +39,7 @@ export function assignDeviceLocations(devices, clusterCount = 4, areasPerCluster
     const areaIndex = Math.min(areasPerCluster - 1, Math.floor(positionInCluster / devicesPerArea));
     return {
       ...device,
-      cluster: locationName(device.cluster, `Cluster ${String(clusterIndex + 1).padStart(2, "0")}`),
+      cluster: locationName(device.cluster, `C${clusterIndex + 1}`),
       zone: locationName(device.zone, `Area ${String(areaIndex + 1).padStart(2, "0")}`)
     };
   });

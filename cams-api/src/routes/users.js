@@ -180,6 +180,23 @@ export function usersRouter() {
     }
   });
 
+  router.delete("/users/:userId/permanent", async (request, response, next) => {
+    try {
+      if (!ObjectId.isValid(request.params.userId)) return response.status(400).json({ error: "Invalid user identifier." });
+      const userId = new ObjectId(request.params.userId);
+      if (userId.equals(request.auth.user.id)) return response.status(400).json({ error: "You cannot permanently delete your own owner account." });
+      const user = await getDatabase().collection("users").findOneAndDelete({ _id: userId, deletedAt: { $ne: null } });
+      if (!user) return response.status(404).json({ error: "Removed user not found." });
+      await Promise.all([
+        getDatabase().collection("sessions").deleteMany({ userId }),
+        getDatabase().collection("passwordResetTokens").deleteMany({ userId })
+      ]);
+      response.json({ deleted: true, userId: userId.toString() });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   router.post("/users/:userId/restore", async (request, response, next) => {
     try {
       if (!ObjectId.isValid(request.params.userId)) return response.status(400).json({ error: "Invalid user identifier." });

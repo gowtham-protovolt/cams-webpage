@@ -8,7 +8,7 @@ import { loadConfig } from "../src/config.js";
 import { parseTelemetryMessage } from "../src/telemetry/schema.js";
 import { ingestTelemetry } from "../src/telemetry/store.js";
 
-const hasDatabase = Boolean(process.env.MONGODB_URI);
+const hasDatabase = Boolean(process.env.MONGODB_URI || (process.env.MONGODB_APP_USERNAME && process.env.MONGODB_APP_PASSWORD));
 
 test("serves authoritative live machine health and persistent alarms", { skip: !hasDatabase }, async () => {
   const baseConfig = loadConfig();
@@ -65,31 +65,29 @@ test("serves authoritative live machine health and persistent alarms", { skip: !
     const alarm = (await alarmResponse.json()).alarms.find(item => item.code === "pressureBar-high");
     assert.equal(alarm.status, "Active");
 
-    const acknowledged = await fetch(`${baseUrl}/api/alarms/${encodeURIComponent(alarm.id)}`, {
-      method: "PATCH", headers: { ...headers, "Content-Type": "application/json" },
-      body: JSON.stringify({ status: "Acknowledged", comment: "Operator inspected the pressure reading." })
-    });
-    assert.equal(acknowledged.status, 200);
-    assert.equal((await acknowledged.json()).alarm.status, "Acknowledged");
+    const recoveredAt = new Date(now.getTime() + 1000);
+    const recoveryPayload = Buffer.from(JSON.stringify({
+      timestamp: recoveredAt.toISOString(), sequence: recoveredAt.getTime(), status: "running", source: "esp32-s3-rs485",
+      metrics: { pressureBar: 7.2, flowLpm: 25, suctionKpa: 1.2 },
+      raw: { pv1: 2100, pv2: 6065, pv3: 8000 }, errors: { flow: 0, suction: 0, pressure: 0 },
+      quality: { flow: "good", suction: "good", pressure: "good", modbus: "good" }
+    }));
+    await ingestTelemetry(parseTelemetryMessage("cams/plant-01/CAMS-01/telemetry", recoveryPayload, recoveredAt), config);
 
-    const resolved = await fetch(`${baseUrl}/api/alarms/${encodeURIComponent(alarm.id)}`, {
-      method: "PATCH", headers: { ...headers, "Content-Type": "application/json" },
-      body: JSON.stringify({ status: "Resolved", comment: "Pressure was corrected and verified at the machine." })
-    });
-    assert.equal(resolved.status, 200);
-    assert.equal((await resolved.json()).alarm.status, "Resolved");
+    const recoveredResponse = await fetch(`${baseUrl}/api/alarms`, { headers });
+    assert.equal(recoveredResponse.status, 200);
+    const recoveredAlarm = (await recoveredResponse.json()).alarms.find(item => item.id === alarm.id);
+    assert.equal(recoveredAlarm.status, "Resolved");
 
     const historyResponse = await fetch(`${baseUrl}/api/alarms/${encodeURIComponent(alarm.id)}/history`, { headers });
     assert.equal(historyResponse.status, 200);
     const history = (await historyResponse.json()).history;
-    assert.equal(history.length, 2);
+    assert.equal(history.length, 1);
     assert.equal(history[0].action, "Resolved");
-    assert.equal(history[0].comment, "Pressure was corrected and verified at the machine.");
-    assert.equal(history[0].actor.displayName, "Monitor Owner");
-    assert.equal(history[0].actor.role, "owner");
+    assert.equal(history[0].comment, "Reading returned to its configured operating range.");
+    assert.equal(history[0].actor.displayName, "CAMS Monitoring");
+    assert.equal(history[0].actor.role, "system");
     assert.ok(history[0].createdAt);
-    assert.equal(history[1].action, "Acknowledged");
-    assert.equal(history[1].comment, "Operator inspected the pressure reading.");
   } finally {
     await new Promise(resolve => server.close(resolve));
     await closeDatabase();
