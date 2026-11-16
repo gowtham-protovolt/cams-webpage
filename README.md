@@ -1,117 +1,122 @@
-# CAMS Webpage Projects
+# CAMS — Compressed Air Monitoring System
 
-This repository contains the review-stage user interface for **CAMS —
-Compressed Air Monitoring System**.
+CAMS is an industrial monitoring platform for receiving ESP32/PLC telemetry,
+tracking compressor health, managing alarms and maintenance, and presenting
+real-time plant information through a browser dashboard.
 
-The application is intentionally stored inside its own project directory. No
-application source files are placed directly in the repository root.
+This repository is the complete, deployable project. Application components
+are separated by responsibility so frontend, backend, firmware, infrastructure,
+and documentation can be reviewed independently.
+
+## System architecture
+
+```text
+ESP32-S3 / PLC sensors
+          |
+          | MQTT over TLS (8883)
+          v
+      Mosquitto
+          |
+          v
+  Dedicated MQTT worker ---- Redis Pub/Sub
+          |                       |
+          v                       v
+       MongoDB          API-1  API-2  API-3  API-4
+                              |
+                              v
+                    Nginx least-connection
+                              |
+                              v
+                      CAMS browser users
+```
+
+- **Frontend:** HTML, CSS and JavaScript ES modules.
+- **Backend:** Node.js, Express and MongoDB.
+- **Live telemetry:** MQTT over TLS, one dedicated ingestion worker and SSE.
+- **Horizontal API scaling:** Nginx distributes requests across four API replicas.
+- **Cross-replica events:** Redis Pub/Sub.
+- **Deployment:** Docker Compose with persistent MongoDB and MQTT volumes.
 
 ## Repository structure
 
 ```text
-cams-webpage/
-├── .github/workflows/validate.yml
-├── .gitignore
-├── CONTRIBUTING.md
-├── README.md
-├── shared/
-│   └── README.md
-├── cams-api/
-│   ├── README.md
-│   ├── docker-compose.yml
-│   ├── package.json
-│   ├── scripts/
-│   ├── src/
-│   └── test/
-├── esp32-rs485-gateway/
-│   ├── arduino/cams_esp32_rs485_gateway/
-│   │   └── cams_esp32_rs485_gateway.ino
-│   ├── include/
-│   ├── src/
-│   └── platformio.ini
-└── cams-webpage/
-    ├── README.md
-    ├── app.js
-    ├── index.html
-    ├── package.json
-    ├── scripts/
-    │   └── validate.mjs
-    └── styles.css
+.
+├── cams-api/                 Backend API, tests and Docker infrastructure
+│   ├── docker/               MongoDB, Mosquitto, Nginx and certificate templates
+│   ├── docs/                 Backend live-monitoring notes
+│   ├── scripts/              Administrative and database utilities
+│   ├── src/                  API and telemetry source code
+│   └── test/                 Unit and integration tests
+├── cams-webpage/             Browser dashboard and UI validation
+├── esp32-devices/            Legacy/example device sketches
+├── esp32-rs485-gateway/      Maintained ESP32-S3 RS485 gateway firmware
+├── load-tests/               k6 concurrent-user test
+├── docs/
+│   ├── API.md                API groups and request flow
+│   ├── ARCHITECTURE.md       Runtime services and data flow
+│   ├── deployment/           Secure deployment and Nginx guides
+│   ├── firmware/             Multi-device firmware guide
+│   └── guides/               Development and handover workflows
+├── .github/workflows/        UI, API, Docker and Nginx validation
+└── README.md                 Project entry point
 ```
 
-## Project
+## Quick start
 
-See [cams-webpage/README.md](cams-webpage/README.md) for objectives,
-requirements, setup, testing, current status, limitations, and observations.
+Requirements: Docker Desktop/Engine with Compose v2.
 
-## Status
+```bash
+cp cams-api/.env.example cams-api/.env
+```
 
-**In Progress** — the E7-branded UI, real authentication API, MongoDB storage,
-MQTT ingestion, protected telemetry APIs, and live dashboard integration are
-implemented locally. Authenticated PDF/XLSX exports are also implemented;
-production deployment remains the final infrastructure step.
+Set strong local values in `cams-api/.env`, install the correct MQTT TLS
+certificate files, then start the complete stack:
 
-## Production hosting
+```bash
+cd cams-api
+docker compose up -d --build
+docker compose ps
+```
 
-For the on-premise deployment supporting up to 1,000 concurrent browser users,
-the maintained Docker Compose stack uses Nginx, four API replicas, one dedicated
-MQTT/background worker, Redis Pub/Sub, MongoDB, and Mosquitto. See
-[`NGINX-1000-USERS.md`](NGINX-1000-USERS.md) for startup, verification, and k6
-load-testing instructions.
+Open `http://localhost:3100`. For the current on-premise server, use
+`http://192.168.0.128:3100` while connected to the plant network.
 
-The deployment target is split between:
+See [deployment/start guide](docs/deployment/START-HERE.md) and
+[secure setup](docs/deployment/SECURE-SETUP.md) before production use.
 
-- GitHub Pages frontend: `https://gowtham-protovolt.github.io/cams-webpage/`
-- Render backend: the HTTPS URL assigned to the `cams-api` service
-- MongoDB Atlas (or another externally reachable MongoDB service)
-- A TLS-enabled public MQTT broker for ESP32 telemetry
+## Validation
 
-Create the Render service from the repository-root `render.yaml`, then add the
-secret `MONGODB_URI`, `MQTT_URL`, `MQTT_USERNAME`, and `MQTT_PASSWORD` values in
-Render. After Render assigns the backend URL, add it as the GitHub Actions
-repository variable `CAMS_API_URL` without a trailing slash. Select **GitHub
-Actions** as the repository's Pages deployment source.
+```bash
+cd cams-webpage && npm test
+cd ../cams-api && npm ci && npm test
+docker compose config --quiet
+```
 
-Never commit local `.env` files, MQTT device credentials, certificates, or
-private keys. Rotate any credential that has appeared in a screenshot or an
-older commit before production use.
-The repository now includes a same-origin production container so the API and
-webpage can be deployed together without third-party session cookies.
-Owner-only user administration is implemented for listing accounts, creating
-operator/viewer users, and enabling or disabling access.
-The ESP32-S3 gateway firmware now reads PLC PV1/PV2/PV3 over Modbus RTU every
-1 second, applies the measured calibrations, and publishes raw and converted
-values through a device-restricted MQTT topic. Hardware wiring and PLC serial
-settings still require supervised commissioning.
-The obsolete simulator/dashboard Docker project and its simulated-data volumes
-were removed. The maintained Docker stack now contains the CAMS webpage/API,
-MongoDB, and authenticated Mosquitto broker only.
+The CI workflow also builds the production image and validates the Nginx
+configuration. The included k6 scenario is documented in
+[NGINX-1000-USERS.md](docs/deployment/NGINX-1000-USERS.md). Four replicas make
+the service ready for load testing; they do not by themselves guarantee a
+1,000-user capacity. Confirm capacity on production-equivalent hardware.
 
-## Implementation roadmap
+## API documentation
 
-1. **Real authentication and API foundation — local implementation complete**
-2. **MongoDB operational data models — local implementation complete**
-3. **MQTT ingestion and live telemetry API — local implementation complete**
-4. **Dashboard API integration — local implementation complete**
-5. **Alarm workflows — planned**
-6. **PDF/Excel exports — local implementation complete**
-7. **Deployment container and security validation — local implementation complete**
-8. **Owner user administration — local implementation complete**
-9. **Managed-service provisioning and production verification — external setup required**
-10. **ESP32-S3 RS485 gateway and three-sensor payload — compile-verified; hardware test required**
+The backend is fully isolated in [`cams-api/`](cams-api/). Start with:
 
-Step 1 is intentionally not described as production-complete until a managed
-MongoDB deployment, HTTPS API host, secrets, real owner account, and production
-domain/cookie configuration are verified.
+- [API overview](docs/API.md)
+- [Backend README](cams-api/README.md)
+- [Architecture and data flow](docs/ARCHITECTURE.md)
+- [Live monitoring](cams-api/docs/LIVE-MONITORING.md)
 
-## Contribution workflow
+## Security
 
-All changes must be made on a clearly named feature, fix, experiment, or
-project branch. Test changes locally, open a pull request, and obtain review
-before merging to `main`. See [CONTRIBUTING.md](CONTRIBUTING.md).
+Never commit `.env` files, passwords, device credentials, private keys,
+production certificates, database exports, or customer telemetry. Only example
+configuration belongs in Git. Rotate any secret that has previously appeared in
+a commit, ZIP archive, terminal output, or screenshot.
 
-## Confidentiality
+## Current status
 
-This repository contains application code and ESP32-S3 gateway firmware. It
-does not include a fake telemetry publisher. Do not commit passwords, tokens, certificates, personal
-information, customer data, real plant readings, or confidential documents.
+The frontend, authenticated API, MongoDB persistence, MQTT ingestion, alarms,
+tickets, exports, four-replica Nginx stack and Redis event distribution are
+implemented. Live online status and health values are derived from actual ESP32
+telemetry; the application does not manufacture online readings.
