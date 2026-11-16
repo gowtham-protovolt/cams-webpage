@@ -1,0 +1,64 @@
+name: Deploy CAMS to GitHub Pages
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "cams-webpage/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: github-pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Validate Render API URL
+        env:
+          CAMS_API_URL: ${{ vars.CAMS_API_URL }}
+        run: |
+          if [ -z "$CAMS_API_URL" ]; then
+            echo "Repository variable CAMS_API_URL is required."
+            exit 1
+          fi
+
+      - name: Validate CAMS frontend
+        working-directory: cams-webpage
+        run: npm test
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Configure CAMS API endpoint
+        env:
+          CAMS_API_URL: ${{ vars.CAMS_API_URL }}
+        run: node cams-webpage/scripts/write-runtime-config.mjs
+
+      - name: Upload CAMS webpage
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: cams-webpage
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
