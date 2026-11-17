@@ -8,6 +8,31 @@ This repository is the complete, deployable project. Application components
 are separated by responsibility so frontend, backend, firmware, infrastructure,
 and documentation can be reviewed independently.
 
+## Owner review and access
+
+- Repository: [gowtham-protovolt/cams-webpage](https://github.com/gowtham-protovolt/cams-webpage)
+- Default branch: `main`
+- The complete frontend, backend, API documentation, deployment files and firmware references are kept in this repository.
+- If the repository is private, add the owner's GitHub account under **Settings → Collaborators and teams** before sharing the link.
+
+```bash
+git clone https://github.com/gowtham-protovolt/cams-webpage.git
+cd cams-webpage
+```
+
+## Review map
+
+| Area | Location |
+| --- | --- |
+| Frontend | [`cams-webpage/`](cams-webpage/) |
+| Backend API | [`cams-api/`](cams-api/) |
+| API reference | [`docs/API.md`](docs/API.md) |
+| Architecture | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) |
+| Deployment | [`docs/deployment/`](docs/deployment/) |
+| Live monitoring | [`cams-api/docs/LIVE-MONITORING.md`](cams-api/docs/LIVE-MONITORING.md) |
+| ESP32 firmware references | [`esp32-devices/`](esp32-devices/) and [`esp32-rs485-gateway/`](esp32-rs485-gateway/) |
+| Load testing | [`load-tests/`](load-tests/) |
+
 ## System architecture
 
 ```text
@@ -113,6 +138,18 @@ Never commit `.env` files, passwords, device credentials, private keys,
 production certificates, database exports, or customer telemetry. Only example
 configuration belongs in Git. Rotate any secret that has previously appeared in
 a commit, ZIP archive, terminal output, or screenshot.
+
+- Only configuration templates such as `cams-api/.env.example` and
+  `cams-api/.env.production.example` are tracked. Real `.env` files are ignored.
+- Firmware secret templates are tracked as `secrets.example.h`; real
+  `secrets.h` files are ignored.
+
+## Hosting note
+
+GitHub Pages publishes only the static frontend. The Node.js API, MongoDB,
+Redis and MQTT broker must run on the CAMS server or another approved backend
+host. Configure the frontend API URL through the deployment workflow or
+`runtime-config.js`; do not place credentials in frontend files.
 
 ## Current status
 

@@ -10,10 +10,12 @@ coverage/
 .env.*
 !.env.example
 !.env.production.example
+!.env.*.example
 tmp/
 *.pem
 *.key
 *.crt
 .pio/
+**/secrets.h
 cams-api/docker/certs/
 cams-api/docker/devices.txt
